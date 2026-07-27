@@ -58,4 +58,11 @@ db.exec(`
   );
 `);
 
+// Safe migrations — SQLite has no built-in migration runner, so check before altering
+const campaignCols = db.prepare("PRAGMA table_info(campaigns)").all();
+const hasInstanceName = campaignCols.some((c) => c.name === 'instance_name');
+if (!hasInstanceName) {
+  db.exec('ALTER TABLE campaigns ADD COLUMN instance_name TEXT');
+}
+
 export default db;

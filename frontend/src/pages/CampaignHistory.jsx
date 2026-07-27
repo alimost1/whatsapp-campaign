@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import { MessageSquare, Eye, X } from 'lucide-react';
 
@@ -8,13 +8,39 @@ export default function CampaignHistory() {
   const [selectedLogs, setSelectedLogs] = useState(null); // campaign id for modal
   const [logs, setLogs] = useState([]);
   const [logsLoading, setLogsLoading] = useState(false);
+  const pollingRef = useRef(null);
+
+  const fetchCampaigns = async () => {
+    try {
+      const res = await api.get('/campaigns');
+      setCampaigns(res.data || []);
+    } catch {
+      setCampaigns([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    api.get('/campaigns')
-      .then((res) => setCampaigns(res.data || []))
-      .catch(() => setCampaigns([]))
-      .finally(() => setLoading(false));
+    fetchCampaigns();
   }, []);
+
+  // Live polling: refresh while any campaign is in 'sending' state
+  useEffect(() => {
+    const hasSending = campaigns.some((c) => c.status === 'sending');
+    if (pollingRef.current) {
+      clearTimeout(pollingRef.current);
+      pollingRef.current = null;
+    }
+    if (hasSending) {
+      pollingRef.current = setTimeout(async () => {
+        await fetchCampaigns();
+      }, 3000);
+    }
+    return () => {
+      if (pollingRef.current) clearTimeout(pollingRef.current);
+    };
+  }, [campaigns]);
 
   const fetchLogs = async (campaignId) => {
     setLogsLoading(true);
@@ -91,27 +117,47 @@ export default function CampaignHistory() {
                   </tr>
                 </thead>
                 <tbody>
-                  {campaigns.map((c) => (
-                    <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="px-6 py-3 font-medium text-gray-800">{c.name}</td>
-                      <td className="px-6 py-3">{statusBadge(c.status)}</td>
-                      <td className="px-6 py-3 text-gray-500 text-xs">{c.contact_group || 'All'}</td>
-                      <td className="px-6 py-3 text-green-600 font-medium">{c.sent_count ?? 0}</td>
-                      <td className="px-6 py-3 text-red-500">{c.failed_count ?? 0}</td>
-                      <td className="px-6 py-3 text-gray-500">
-                        {c.created_at ? new Date(c.created_at).toLocaleDateString() : '-'}
-                      </td>
-                      <td className="px-6 py-3">
-                        <button
-                          onClick={() => openDetails(c)}
-                          className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          Details
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {campaigns.map((c) => {
+                    const total = c.total_contacts || 0;
+                    const done = (c.sent_count || 0) + (c.failed_count || 0);
+                    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                    return (
+                      <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-6 py-3 font-medium text-gray-800">{c.name}</td>
+                        <td className="px-6 py-3">
+                          <div className="space-y-1">
+                            {statusBadge(c.status)}
+                            {c.status === 'sending' && total > 0 && (
+                              <div className="w-32">
+                                <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-yellow-500 transition-all"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                                <p className="text-xs text-gray-500 mt-0.5">{done}/{total}</p>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-3 text-gray-500 text-xs">{c.contact_group || 'All'}</td>
+                        <td className="px-6 py-3 text-green-600 font-medium">{c.sent_count ?? 0}</td>
+                        <td className="px-6 py-3 text-red-500">{c.failed_count ?? 0}</td>
+                        <td className="px-6 py-3 text-gray-500">
+                          {c.created_at ? new Date(c.created_at).toLocaleDateString() : '-'}
+                        </td>
+                        <td className="px-6 py-3">
+                          <button
+                            onClick={() => openDetails(c)}
+                            className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Details
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

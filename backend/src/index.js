@@ -27,6 +27,7 @@ import contactsRouter from './routes/contacts.js';
 import uploadRouter from './routes/upload.js';
 import campaignsRouter from './routes/campaigns.js';
 import sendRouter from './routes/send.js';
+import { resumeInterruptedCampaigns } from './services/campaignWorker.js';
 
 app.use('/api/auth', authRouter);
 app.use('/api/contacts', contactsRouter);
@@ -49,6 +50,9 @@ app.get('*', (req, res) => {
 // Ensure upload dirs on startup
 fs.mkdirSync(path.join(uploadsDir, 'contacts'), { recursive: true });
 fs.mkdirSync(path.join(uploadsDir, 'media'), { recursive: true });
+
+// Resume any campaigns that were mid-send when the server stopped
+resumeInterruptedCampaigns();
 
 app.listen(PORT, () => {
   console.log(`WhatsApp Campaign API + Frontend running on port ${PORT}`);

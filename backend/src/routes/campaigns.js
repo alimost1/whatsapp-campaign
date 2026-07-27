@@ -64,7 +64,10 @@ router.get('/:id', (req, res) => {
     .prepare('SELECT * FROM campaigns WHERE id = ? AND user_id = ?')
     .get(req.params.id, req.userId);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
-  res.json(campaign);
+  const send_logs = db
+    .prepare('SELECT * FROM send_logs WHERE campaign_id = ? ORDER BY id')
+    .all(req.params.id);
+  res.json({ ...campaign, send_logs });
 });
 
 // POST /api/campaigns/:id/image — upload an image for the campaign

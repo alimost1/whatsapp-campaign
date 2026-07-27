@@ -16,6 +16,7 @@ export default function CampaignNew() {
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState(null); // { type: 'info'|'success'|'error', msg }
   const [progress, setProgress] = useState(null); // { sent: 0, failed: 0, total: 0 }
+  const pollingRef = useRef(null); // tracks active polling timer (avoid stale-closure bug)
   const imageInputRef = useRef(null);
   const navigate = useNavigate();
 
@@ -23,6 +24,13 @@ export default function CampaignNew() {
     api.get('/contacts/groups')
       .then((res) => setGroups(res.data || []))
       .catch(() => setGroups([]));
+  }, []);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearTimeout(pollingRef.current);
+    };
   }, []);
 
   const handleImageChange = (e) => {
@@ -48,7 +56,6 @@ export default function CampaignNew() {
 
     try {
       // 1. Create campaign
-      let imageUrl = '';
       const formData = new FormData();
       formData.append('name', name.trim());
       formData.append('message_text', message.trim());
@@ -60,22 +67,30 @@ export default function CampaignNew() {
       });
       const campaignId = campaignRes.data.id;
 
-      setStatus({ type: 'info', msg: 'Campaign created. Sending messages...' });
-
-      // 2. Send campaign
-      const sendRes = await api.post(`/campaigns/${campaignId}/send`, {
+      // 2. Enqueue (returns 202 immediately — worker handles sending in background)
+      await api.post(`/campaigns/${campaignId}/send`, {
         instanceName: instanceName.trim(),
       });
 
-      // Poll for progress
-      pollProgress(campaignId);
+      setStatus({
+        type: 'info',
+        msg: 'Campaign queued — sending in background. You can navigate away; check Campaign History for progress.',
+      });
+      setProgress({ sent: 0, failed: 0, total: campaignRes.data.total_contacts || 0 });
+
+      // 3. Poll for progress
+      startPolling(campaignId);
     } catch (err) {
       setSending(false);
-      setStatus({ type: 'error', msg: err.response?.data?.error || 'Failed to send campaign.' });
+      const msg = err.response?.status === 409
+        ? 'Campaign is already sending.'
+        : (err.response?.data?.error || 'Failed to send campaign.');
+      setStatus({ type: 'error', msg });
     }
   };
 
-  const pollProgress = async (campaignId) => {
+  const startPolling = (campaignId) => {
+    if (pollingRef.current) clearTimeout(pollingRef.current);
     const poll = async () => {
       try {
         const res = await api.get(`/campaigns/${campaignId}`);
@@ -87,14 +102,15 @@ export default function CampaignNew() {
             type: c.status === 'completed' ? 'success' : 'error',
             msg: c.status === 'completed'
               ? `Campaign completed! ${c.sent_count} sent, ${c.failed_count} failed.`
-              : 'Campaign failed.',
+              : `Campaign failed. ${c.sent_count} sent, ${c.failed_count} failed.`,
           });
+          pollingRef.current = null;
           return;
         }
       } catch {
         // keep polling
       }
-      if (sending) setTimeout(poll, 2000);
+      pollingRef.current = setTimeout(poll, 2000);
     };
     poll();
   };
