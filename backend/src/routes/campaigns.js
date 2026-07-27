@@ -30,9 +30,15 @@ router.get('/', (req, res) => {
 });
 
 // POST /api/campaigns — create a new campaign
-router.post('/', upload.none(), (req, res) => {
-  const { name, message_text, contact_group, image_url } = req.body;
+router.post('/', upload.single('image'), (req, res) => {
+  const { name, message_text, contact_group } = req.body;
   if (!name) return res.status(400).json({ error: 'Campaign name is required' });
+
+  // If an image was uploaded, persist it now and store the public path
+  let imagePath = null;
+  if (req.file) {
+    imagePath = `/uploads/media/${req.file.filename}`;
+  }
 
   const stmt = db.prepare(
     'INSERT INTO campaigns (user_id, name, message_text, contact_group, image_path) VALUES (?, ?, ?, ?, ?)'
@@ -42,10 +48,14 @@ router.post('/', upload.none(), (req, res) => {
     name,
     message_text || '',
     contact_group || null,
-    image_url || null
+    imagePath
   );
-  const imagePath = image_url ? `/uploads/media/${image_url}` : null;
-  res.json({ id: result.lastInsertRowid, name, status: 'draft', image_path: imagePath });
+  res.json({
+    id: result.lastInsertRowid,
+    name,
+    status: 'draft',
+    image_path: imagePath,
+  });
 });
 
 // GET /api/campaigns/:id — get a single campaign (404 if not found or wrong user)

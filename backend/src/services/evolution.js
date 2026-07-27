@@ -49,12 +49,16 @@ export async function sendTextMessage(instanceName, number, text) {
 
 /**
  * Send image message via Evolution API
+ * Uses /message/sendMedia with mediatype=image
  */
 export async function sendImageMessage(instanceName, number, imageUrl, caption = '') {
-  const url = `${getEvolutionUrl()}/message/sendImage/${instanceName}`;
+  const url = `${getEvolutionUrl()}/message/sendMedia/${instanceName}`;
   const payload = {
     number: normalizeNumber(number),
-    image: imageUrl,
+    mediatype: 'image',
+    media: imageUrl,
+    mimetype: 'image/png',
+    fileName: 'image.png',
     caption,
     delay: randomDelay(1000, 4000),
   };
