@@ -7,5 +7,9 @@ dist/
 uploads/
 .hermes/
 data/
+!data/.gitkeep
+!data/instances.jsonl
+!data/campaigns.jsonl
+!data/contacts.jsonl
 *.log
 .DS_Store

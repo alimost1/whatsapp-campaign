@@ -27,6 +27,7 @@ import contactsRouter from './routes/contacts.js';
 import uploadRouter from './routes/upload.js';
 import campaignsRouter from './routes/campaigns.js';
 import sendRouter from './routes/send.js';
+import v2Router from './routes/v2.js';
 import { resumeInterruptedCampaigns } from './services/campaignWorker.js';
 
 app.use('/api/auth', authRouter);
@@ -34,6 +35,7 @@ app.use('/api/contacts', contactsRouter);
 app.use('/api/contacts/upload', uploadRouter);
 app.use('/api/campaigns', campaignsRouter);
 app.use('/api/campaigns', sendRouter);
+app.use('/api/v2', v2Router);
 
 // Health
 app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
