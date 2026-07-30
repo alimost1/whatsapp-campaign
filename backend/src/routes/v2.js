@@ -9,6 +9,11 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { requireAuth } from '../auth.js';
 import { dispatchCampaign } from '../services/v2Dispatcher.js';
+import {
+  phoneFromWebhook,
+  attributeReply,
+  computeVariantReport,
+} from '../services/v2Attribution.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../../data');
@@ -35,6 +40,31 @@ function id() {
 }
 
 const router = Router();
+
+// ── Webhook (public — Evolution API posts here, no JWT) ──────────────────
+// POST /api/v2/webhooks/evolution — receives incoming WhatsApp messages from Evolution API
+// Body shape: { event: 'messages.upsert', instance: 'xxx', data: { key: {...}, message: {...}, ... } }
+router.post('/webhooks/evolution', (req, res) => {
+  const body = req.body || {};
+  const event = body.event;
+  // We only care about incoming text messages
+  if (event !== 'messages.upsert') return res.json({ ignored: event });
+  const instanceName = body.instance;
+  const phone = phoneFromWebhook(body);
+  if (!phone) return res.json({ ignored: 'no phone or fromMe' });
+
+  const text =
+    body?.data?.message?.conversation ||
+    body?.data?.message?.extendedTextMessage?.text ||
+    '';
+  const messageId = body?.data?.key?.id || null;
+  const pushName = body?.data?.pushName || null;
+
+  const result = attributeReply({ phone, instanceName, messageId, pushName, text });
+  if (!result) return res.json({ attributed: false, phone, instanceName });
+  res.json({ attributed: true, phone, instanceName, ...result });
+});
+
 router.use(requireAuth);
 
 // ── Instances ─────────────────────────────────────────────
@@ -144,6 +174,13 @@ router.get('/campaigns/:cid/progress', (req, res) => {
     startedAt: c.startedAt || null,
     completedAt: c.completedAt || null,
   });
+});
+
+// GET /api/v2/campaigns/:cid/results — A/B variant performance report
+router.get('/campaigns/:cid/results', (req, res) => {
+  const report = computeVariantReport(req.params.cid);
+  if (!report) return res.status(404).json({ error: 'campaign not found' });
+  res.json(report);
 });
 
 // ── Contacts (segmentation) ───────────────────────────────
