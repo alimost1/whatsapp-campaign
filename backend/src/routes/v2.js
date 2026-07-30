@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { requireAuth } from '../auth.js';
+import { dispatchCampaign } from '../services/v2Dispatcher.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../../data');
@@ -105,6 +106,44 @@ router.get('/campaigns/:cid', (req, res) => {
   const c = campaigns.find((x) => x.id === req.params.cid);
   if (!c) return res.status(404).json({ error: 'not found' });
   res.json(c);
+});
+
+// POST /api/v2/campaigns/:cid/send-now — kick off dispatch immediately (no waiting for cron)
+router.post('/campaigns/:cid/send-now', async (req, res) => {
+  const campaigns = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
+  const c = campaigns.find((x) => x.id === req.params.cid);
+  if (!c) return res.status(404).json({ error: 'campaign not found' });
+  if (c.status === 'sending') return res.status(409).json({ error: 'already sending' });
+  if (c.status === 'sent') return res.status(409).json({ error: 'already sent' });
+  // Set status to pending so dispatcher picks it up
+  c.status = 'pending';
+  const all = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
+  const idx = all.findIndex((x) => x.id === c.id);
+  if (idx >= 0) {
+    all[idx] = c;
+    writeJsonl(CAMPAIGNS_FILE, all);
+  }
+  // Fire and forget — return immediately
+  dispatchCampaign(c.id).catch((e) => console.error('[v2-dispatcher]', e));
+  res.status(202).json({ campaignId: c.id, status: 'pending' });
+});
+
+// GET /api/v2/campaigns/:cid/progress — live progress (sent/failed/total + status)
+router.get('/campaigns/:cid/progress', (req, res) => {
+  const campaigns = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
+  const c = campaigns.find((x) => x.id === req.params.cid);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const sent = (c.sentLog || []).filter((s) => s.status === 'sent').length;
+  const failed = (c.sentLog || []).filter((s) => s.status === 'failed').length;
+  res.json({
+    status: c.status,
+    sent,
+    failed,
+    total: (c.sentLog || []).length,
+    summary: c.summary || null,
+    startedAt: c.startedAt || null,
+    completedAt: c.completedAt || null,
+  });
 });
 
 // ── Contacts (segmentation) ───────────────────────────────

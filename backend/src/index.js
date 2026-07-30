@@ -29,6 +29,7 @@ import campaignsRouter from './routes/campaigns.js';
 import sendRouter from './routes/send.js';
 import v2Router from './routes/v2.js';
 import { resumeInterruptedCampaigns } from './services/campaignWorker.js';
+import { tick as v2Tick } from './services/v2Dispatcher.js';
 
 app.use('/api/auth', authRouter);
 app.use('/api/contacts', contactsRouter);
@@ -55,6 +56,12 @@ fs.mkdirSync(path.join(uploadsDir, 'media'), { recursive: true });
 
 // Resume any campaigns that were mid-send when the server stopped
 resumeInterruptedCampaigns();
+
+// v2 dispatcher — poll every minute for scheduled campaigns due now
+setInterval(() => {
+  v2Tick().catch((e) => console.error('[v2-dispatcher tick]', e.message));
+}, 60_000);
+console.log('[v2-dispatcher] scheduled-tick interval started (every 60s)');
 
 app.listen(PORT, () => {
   console.log(`WhatsApp Campaign API + Frontend running on port ${PORT}`);
