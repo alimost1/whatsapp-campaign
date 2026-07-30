@@ -1,0 +1,2 @@
+{"campaigns": [], "_comment": "Campaign definitions: {id, name, channel, instance, message|variants, targetTags, scheduledAt, status, sentLog}"}
+{"id":"05d408e7a3ae","name":"villa promo","channel":"evolution","instanceName":"campaign-instance","message":{"variants":["A: villa promo 30% off","B: exclusive villa deal 40% off"]},"targetTags":["villa"],"targetTagMode":"OR","scheduledAt":"2026-08-01T10:00:00Z","contacts":null,"status":"pending","createdAt":"2026-07-30T14:00:33.110Z","sentLog":[]}
