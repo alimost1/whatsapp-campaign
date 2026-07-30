@@ -5,7 +5,7 @@ import { Send, Image, MessageSquare, AlertCircle } from 'lucide-react';
 
 const WHATSAPP_LIMIT = 1024;
 
-export default function CampaignNew() {
+export default function CampaignNew({ v2 } = {}) {
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
   const [contactGroup, setContactGroup] = useState('');
@@ -123,10 +123,16 @@ export default function CampaignNew() {
             <MessageSquare className="w-5 h-5 text-white" />
           </div>
           <span className="text-lg font-bold text-gray-800">New Campaign</span>
-          <a href="/dashboard" className="ml-auto text-sm text-green-600 hover:underline">
+          <a href={v2 ? "/v2/dashboard" : "/dashboard"} className="ml-auto text-sm text-green-600 hover:underline">
             ← Back
           </a>
         </div>
+      
+          {v2 && (
+            <span className="ml-2 px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full font-semibold">
+              v2 · yoorika
+            </span>
+          )}
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-8">

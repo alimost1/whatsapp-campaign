@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../api';
 import { Users, Send, MessageSquare, Plus, LogOut, Wifi, WifiOff, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
 
-export default function Dashboard() {
+export default function Dashboard({ v2 } = {}) {
   const [campaigns, setCampaigns] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -89,6 +89,12 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
+      
+          {v2 && (
+            <span className="ml-2 px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full font-semibold">
+              v2 · yoorika
+            </span>
+          )}
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import { MessageSquare, Eye, X } from 'lucide-react';
 
-export default function CampaignHistory() {
+export default function CampaignHistory({ v2 } = {}) {
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedLogs, setSelectedLogs] = useState(null); // campaign id for modal
@@ -81,10 +81,16 @@ export default function CampaignHistory() {
             <MessageSquare className="w-5 h-5 text-white" />
           </div>
           <span className="text-lg font-bold text-gray-800">Campaign History</span>
-          <a href="/dashboard" className="ml-auto text-sm text-green-600 hover:underline">
+          <a href={v2 ? "/v2/dashboard" : "/dashboard"} className="ml-auto text-sm text-green-600 hover:underline">
             ← Back to Dashboard
           </a>
         </div>
+      
+          {v2 && (
+            <span className="ml-2 px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full font-semibold">
+              v2 · yoorika
+            </span>
+          )}
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
@@ -94,7 +100,7 @@ export default function CampaignHistory() {
           <div className="bg-white rounded-xl shadow-sm p-16 text-center text-gray-500">
             <MessageSquare className="w-12 h-12 mx-auto mb-3 text-gray-300" />
             <p>No campaigns yet.</p>
-            <a href="/campaigns/new" className="text-green-600 hover:underline text-sm mt-1 inline-block">
+            <a href={v2 ? "/v2/campaigns/new" : "/campaigns/new"} className="text-green-600 hover:underline text-sm mt-1 inline-block">
               Create your first campaign
             </a>
           </div>

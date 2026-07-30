@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import { Upload, Users, Trash2, Filter, X } from 'lucide-react';
 
-export default function Contacts() {
+export default function Contacts({ v2 } = {}) {
   const [contacts, setContacts] = useState([]);
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState('');
@@ -93,10 +93,16 @@ export default function Contacts() {
             <Users className="w-5 h-5 text-white" />
           </div>
           <span className="text-lg font-bold text-gray-800">Contacts</span>
-          <a href="/dashboard" className="ml-auto text-sm text-green-600 hover:underline">
+          <a href={v2 ? "/v2/dashboard" : "/dashboard"} className="ml-auto text-sm text-green-600 hover:underline">
             ← Back to Dashboard
           </a>
         </div>
+      
+          {v2 && (
+            <span className="ml-2 px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full font-semibold">
+              v2 · yoorika
+            </span>
+          )}
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
