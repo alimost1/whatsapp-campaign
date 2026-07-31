@@ -13,6 +13,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { send } from './channels.js';
 import { computeDelay } from './antiSpam.js';
+import { ensureWebhook } from './webhookConfig.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -58,6 +59,13 @@ export async function dispatchCampaign(campaignId) {
   const c = all.find((x) => x.id === campaignId);
   if (!c) throw new Error(`Campaign ${campaignId} not found`);
   if (c.status === 'sent' || c.status === 'sending') return { skipped: 'already ' + c.status };
+
+  // Safety net: ensure webhook is configured for reply attribution
+  if (c.instanceName) {
+    ensureWebhook(c.instanceName).catch((e) =>
+      console.error(`[v2-dispatcher] webhook config failed for ${c.instanceName}:`, e.message)
+    );
+  }
 
   // Resolve target contacts (either explicit or tag-filtered)
   let contacts = c.contacts;

@@ -14,6 +14,7 @@ import {
   attributeReply,
   computeVariantReport,
 } from '../services/v2Attribution.js';
+import { ensureWebhook, getWebhook, buildWebhookUrl } from '../services/webhookConfig.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../../data');
@@ -73,7 +74,7 @@ router.get('/instances', (req, res) => {
   res.json(data.filter((d) => d.name)); // skip the _comment lines
 });
 
-router.post('/instances', (req, res) => {
+router.post('/instances', async (req, res) => {
   const { name, purpose = '', tags = [], defaultChannel = 'evolution' } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   const instances = readJsonl(INSTANCES_FILE).filter((d) => d.name);
@@ -81,7 +82,11 @@ router.post('/instances', (req, res) => {
     return res.status(409).json({ error: `Instance "${name}" already exists` });
   const entry = { name, purpose, tags, defaultChannel, createdAt: new Date().toISOString() };
   appendJsonl(INSTANCES_FILE, entry);
-  res.json(entry);
+  // Auto-configure webhook so replies land at /api/v2/webhooks/evolution.
+  // Non-fatal — if instance doesn't exist on Evolution yet (waiting for QR),
+  // log it but still return success.
+  const webhookResult = await ensureWebhook(name);
+  res.json({ instance: entry, webhook: webhookResult });
 });
 
 router.delete('/instances/:name', (req, res) => {
@@ -89,6 +94,25 @@ router.delete('/instances/:name', (req, res) => {
   const next = instances.filter((i) => i.name !== req.params.name);
   writeJsonl(INSTANCES_FILE, next);
   res.json({ deleted: instances.length - next.length });
+});
+
+// POST /api/v2/instances/:name/sync-webhook — manually (re-)configure webhook
+router.post('/instances/:name/sync-webhook', async (req, res) => {
+  const result = await ensureWebhook(req.params.name);
+  if (!result.ok) return res.status(502).json(result);
+  res.json(result);
+});
+
+// GET /api/v2/instances/:name/webhook-status — verify what's currently configured
+router.get('/instances/:name/webhook-status', async (req, res) => {
+  const expectedUrl = buildWebhookUrl();
+  const current = await getWebhook(req.params.name);
+  if (!current.ok) return res.status(502).json({ expectedUrl, current });
+  res.json({
+    expectedUrl,
+    configured: current.config,
+    match: current.config?.webhook?.url === expectedUrl,
+  });
 });
 
 // ── Campaigns ─────────────────────────────────────────────
