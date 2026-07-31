@@ -130,7 +130,7 @@ export default function CampaignNew({ v2 } = {}) {
       
           {v2 && (
             <span className="ml-2 px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full font-semibold">
-              v2 · yoorika
+              v2 · chatbot
             </span>
           )}
       </header>

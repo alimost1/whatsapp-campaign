@@ -4,7 +4,7 @@ import { APP_VERSION, APP_CODENAME } from '../version';
 
 const VERSIONS = [
   { id: '1', label: 'v1', name: 'Classic', codename: 'athena', path: '' },
-  { id: '2', label: 'v2', name: 'Yoorika', codename: 'yoorika', path: '/v2' },
+  { id: '2', label: 'v2', name: 'Chatbot', codename: 'chatbot', path: '/v2' },
 ];
 
 /**
