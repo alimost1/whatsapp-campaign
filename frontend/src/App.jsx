@@ -7,6 +7,7 @@ import Contacts from './pages/Contacts';
 import CampaignNew from './pages/CampaignNew';
 import CampaignHistory from './pages/CampaignHistory';
 import VersionBadge from './components/VersionBadge';
+import ChatAssistant from './components/ChatAssistant';
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -74,6 +75,7 @@ function App() {
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      <ChatAssistant />
     </BrowserRouter>
   );
 }

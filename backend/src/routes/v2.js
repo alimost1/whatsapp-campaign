@@ -15,6 +15,7 @@ import {
   computeVariantReport,
 } from '../services/v2Attribution.js';
 import { ensureWebhook, getWebhook, buildWebhookUrl } from '../services/webhookConfig.js';
+import { chat as chatAssistant, listCategoriesAPI } from '../services/v2Chat.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../../data');
@@ -205,6 +206,22 @@ router.get('/campaigns/:cid/results', (req, res) => {
   const report = computeVariantReport(req.params.cid);
   if (!report) return res.status(404).json({ error: 'campaign not found' });
   res.json(report);
+});
+
+// ── Chat assistant (Promo Immo Marrakech) ─────────────────
+// POST /api/v2/chat — body: { message: "..." }
+router.post('/chat', async (req, res) => {
+  try {
+    const result = await chatAssistant(req.body?.message);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ intent: 'error', text: 'Erreur: ' + e.message });
+  }
+});
+
+// GET /api/v2/chat/categories — list property categories
+router.get('/chat/categories', (req, res) => {
+  res.json(listCategoriesAPI());
 });
 
 // ── Contacts (segmentation) ───────────────────────────────
