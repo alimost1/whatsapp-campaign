@@ -49,8 +49,10 @@ const router = Router();
 router.post('/webhooks/evolution', (req, res) => {
   const body = req.body || {};
   const event = body.event;
-  // We only care about incoming text messages
-  if (event !== 'messages.upsert') return res.json({ ignored: event });
+  // Evolution may send either 'messages.upsert' (lowercase) or 'MESSAGES_UPSERT' (uppercase enum)
+  if (event !== 'messages.upsert' && event !== 'MESSAGES_UPSERT') {
+    return res.json({ ignored: event });
+  }
   const instanceName = body.instance;
   const phone = phoneFromWebhook(body);
   if (!phone) return res.json({ ignored: 'no phone or fromMe' });

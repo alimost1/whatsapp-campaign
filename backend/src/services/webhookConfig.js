@@ -17,7 +17,7 @@ const EVOLUTION_KEY = process.env.EVOLUTION_API_KEY || '';
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3001';
 
 export const WEBHOOK_PATH = '/api/v2/webhooks/evolution';
-export const WEBHOOK_EVENTS = ['messages.upsert'];
+export const WEBHOOK_EVENTS = ['MESSAGES_UPSERT'];
 
 export function buildWebhookUrl() {
   return `${BASE_URL.replace(/\/$/, '')}${WEBHOOK_PATH}`;
