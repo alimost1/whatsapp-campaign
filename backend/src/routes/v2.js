@@ -14,7 +14,8 @@ import {
   attributeReply,
   computeVariantReport,
 } from '../services/v2Attribution.js';
-import { handleWhatsAppMessage } from '../services/whatsappAssistant.js';
+import { handleWhatsAppMessage, tickFollowUps } from '../services/whatsappAssistant.js';
+import { listAllLeads } from '../services/leadCapture.js';
 import { ensureWebhook, getWebhook, buildWebhookUrl } from '../services/webhookConfig.js';
 import { chat as chatAssistant, listCategoriesAPI } from '../services/v2Chat.js';
 
@@ -238,6 +239,17 @@ router.post('/chat', async (req, res) => {
 // GET /api/v2/chat/categories — list property categories
 router.get('/chat/categories', (req, res) => {
   res.json(listCategoriesAPI());
+});
+
+// GET /api/v2/chat/leads — list all chat leads (dashboard)
+router.get('/chat/leads', (req, res) => {
+  res.json(listAllLeads());
+});
+
+// POST /api/v2/chat/follow-ups — manually trigger follow-up sweep
+router.post('/chat/follow-ups', async (req, res) => {
+  const result = await tickFollowUps();
+  res.json(result);
 });
 
 // ── Contacts (segmentation) ───────────────────────────────

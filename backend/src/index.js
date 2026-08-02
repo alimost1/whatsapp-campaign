@@ -30,6 +30,7 @@ import sendRouter from './routes/send.js';
 import v2Router from './routes/v2.js';
 import { resumeInterruptedCampaigns } from './services/campaignWorker.js';
 import { tick as v2Tick } from './services/v2Dispatcher.js';
+import { tickFollowUps } from './services/whatsappAssistant.js';
 
 app.use('/api/auth', authRouter);
 app.use('/api/contacts', contactsRouter);
@@ -62,6 +63,16 @@ setInterval(() => {
   v2Tick().catch((e) => console.error('[v2-dispatcher tick]', e.message));
 }, 60_000);
 console.log('[v2-dispatcher] scheduled-tick interval started (every 60s)');
+
+// v2 follow-ups — poll every hour for stale chat leads (24h+ since last contact)
+setInterval(() => {
+  tickFollowUps()
+    .then((r) => {
+      if (r.sent > 0) console.log(`[follow-ups] sent ${r.sent} follow-up messages`);
+    })
+    .catch((e) => console.error('[follow-ups tick]', e.message));
+}, 60 * 60_000); // 1 hour
+console.log('[follow-ups] tick interval started (every hour)');
 
 app.listen(PORT, () => {
   console.log(`WhatsApp Campaign API + Frontend running on port ${PORT}`);

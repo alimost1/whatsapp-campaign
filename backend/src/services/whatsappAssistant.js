@@ -19,6 +19,8 @@
  */
 import axios from 'axios';
 import { chat as chatAssistant } from './v2Chat.js';
+import { recordLead, markFollowUpSent, listStaleLeads } from './leadCapture.js';
+import { send as evolutionSend } from './channels.js';
 
 const EVOLUTION_URL = process.env.EVOLUTION_API_URL || 'http://localhost:8082';
 const EVOLUTION_KEY = process.env.EVOLUTION_API_KEY || '';
@@ -155,13 +157,74 @@ export async function handleWhatsAppMessage(payload) {
   const sent = await sendWhatsAppReply({ instanceName, phone, text: replyText });
   if (!sent.ok) {
     console.error(`[whatsapp-assistant] send failed:`, sent.error);
+    // Still record the lead even if send failed — we want to know they messaged.
+    try {
+      recordLead({
+        phone,
+        pushName,
+        message: text,
+        intent: chatResult.intent,
+        instanceName,
+      });
+    } catch (e) {
+      console.error('[whatsapp-assistant] lead record failed:', e.message);
+    }
     return { replied: false, reason: 'send-failed', error: sent.error };
+  }
+
+  // Record the lead
+  try {
+    recordLead({
+      phone,
+      pushName,
+      message: text,
+      intent: chatResult.intent,
+      instanceName,
+    });
+  } catch (e) {
+    console.error('[whatsapp-assistant] lead record failed:', e.message);
   }
 
   console.log(
     `[whatsapp-assistant] replied to ${phone} (${pushName || 'unknown'}) on ${instanceName}, msgId=${sent.id}, intent=${chatResult.intent}`
   );
   return { replied: true, messageId: sent.id, intent: chatResult.intent };
+}
+
+/**
+ * Send a follow-up message to stale leads (24h+ since last activity).
+ * Called by a cron tick every hour.
+ * Returns { sent: number, failed: number }.
+ */
+export async function tickFollowUps() {
+  const stale = listStaleLeads(24 * 60 * 60 * 1000);
+  let sent = 0;
+  let failed = 0;
+  for (const lead of stale) {
+    const text =
+      `Bonjour ${lead.pushName || ''} ! 👋\n\n` +
+      `Il y a 24h vous nous avez contacté pour un bien immobilier. ` +
+      `Avez-vous toujours de l'intérêt ? Je peux vous envoyer les nouveautés qui correspondent à votre recherche.\n\n` +
+      `Répondez *OUI* pour recevoir, *NON* pour ne plus être contacté.`;
+    try {
+      const r = await evolutionSend({
+        channel: 'evolution',
+        instanceName: lead.instanceName || 'promo1',
+        number: lead.phone,
+        text,
+      });
+      if (r.ok) {
+        markFollowUpSent(lead.phone);
+        sent++;
+      } else {
+        failed++;
+      }
+    } catch (e) {
+      console.error(`[follow-up] ${lead.phone} failed:`, e.message);
+      failed++;
+    }
+  }
+  return { sent, failed, considered: stale.length };
 }
 
 function phoneFromEvent(payload) {

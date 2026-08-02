@@ -18,8 +18,8 @@ import { searchProperties, getPropertyDetail, listCategories } from './promoScra
 
 const AGENCY = {
   name: 'Promo Immo Marrakech',
-  whatsapp: '+212****5359',
-  whatsappDisplay: '+212****5359',
+  whatsapp: '+212641390881',
+  whatsappDisplay: '+212641390881',
   site: 'https://www.promoimmomarrakech.com',
   email: null,
 };
@@ -72,6 +72,43 @@ function detectNeighborhood(text) {
     if (lower.includes(n.toLowerCase())) return n;
   }
   return null;
+}
+
+/**
+ * Extract a max price from user message.
+ * Supports:
+ *   - "max 500000 DH" / "max 500k dh" / "max 1m dh"
+ *   - "budget 500000" / "budget 1 million"
+ *   - "moins de 500000" / "under 500k"
+ *   - "pas plus de 1m" / "ne dépasse pas 500k"
+ *   - Arabic: "بحدود", "أقل من", "سعر أقل من"
+ * Returns null if no price mentioned, or { max: number, currency: 'DH'|'EUR' }.
+ */
+function detectPrice(text) {
+  const lower = text.toLowerCase();
+  const currencyMatch = text.match(/(DH|EUR|€|درهم|د\.م\.)/i);
+  const currency = currencyMatch
+    ? (currencyMatch[1].match(/EUR|€/) ? 'EUR' : 'DH')
+    : 'DH';
+
+  // Look for "max" / "budget" / "sous" patterns
+  const isMax =
+    /(\bmax\b|\bbudget\b|\bsous\b|\bmoins\b|\bunder\b|\bbelow\b|بحدود|أقل\s+من|سعر\s+أقل)/i.test(text);
+
+  if (!isMax) return null;
+
+  // Extract a number with optional k/m suffix or spelled-out "million"
+  // Handle "500,000" or "500 000" as a single number; prefer longer matches.
+  let m = lower.match(/(\d{1,3}(?:[\s,]\d{3})+|\d{3,7}|\d{2})[\s,.]*([kKmM]|million|millions|ألف)?/);
+  if (!m) return null;
+
+  let value = parseInt(m[1].replace(/[^\d]/g, ''), 10);
+  if (!value || isNaN(value)) return null;
+  const unit = (m[2] || '').toLowerCase();
+  if (unit.startsWith('k') || unit.startsWith('ألف')) value *= 1_000;
+  else if (unit.startsWith('m') || unit.includes('million')) value *= 1_000_000;
+
+  return { max: value, currency };
 }
 
 export async function chat(message) {
@@ -151,8 +188,9 @@ export async function chat(message) {
   const minBedrooms = extractNumber(text, 'chambre') || extractNumber(text, 'bedroom');
   const minSurface = extractNumber(text, 'm') || extractNumber(text, 'm²') || extractNumber(text, 'surface');
   const neighborhood = detectNeighborhood(text);
+  const price = detectPrice(text);
 
-  if (type || kind || neighborhood || text.match(/propose|dispo|cherche|voulez|vendez|louer|vendre/i)) {
+  if (type || kind || neighborhood || price || text.match(/propose|dispo|cherche|voulez|vendez|louer|vendre/i)) {
     let props = await searchProperties({
       type,
       kind,
@@ -172,6 +210,29 @@ export async function chat(message) {
         limit: 12,
       });
       fellBack = true;
+    }
+    // Price filter: best-effort — extract any digits from title/description that look like a price.
+    // Site listings rarely have prices in the listing card, so we keep all but mention the
+    // approximate filter to the user. We'll do a stricter filter if price appears in the title.
+    if (price) {
+      const max = price.max;
+      const priced = props.filter((p) => {
+        const haystack = `${p.title || ''} ${p.description || ''} ${p.url || ''}`;
+        // Look for "180.000", "180 000", "180000", "180k", "1.5m"
+        const matches = haystack.match(/(\d{1,3}(?:[.,\s]\d{3})*|\d+)\s*([kKmM])?\s*(DH|€|dirham|euros?)/gi);
+        if (!matches) return true; // no price visible → keep
+        for (const m of matches) {
+          const numStr = m.match(/[\d.,\s]+/)[0];
+          let num = parseInt(numStr.replace(/[^\d]/g, ''), 10);
+          const unit = (m.match(/[kKmM]/) || [''])[0].toLowerCase();
+          if (unit === 'k') num *= 1_000;
+          if (unit === 'm') num *= 1_000_000;
+          if (num <= max) return true; // found a price within budget → keep
+        }
+        return false; // all visible prices exceed budget
+      });
+      if (priced.length > 0) props = priced;
+      // else: keep all (we don't want to mislead the user when we can't tell)
     }
     const title =
       type && kind
@@ -197,12 +258,14 @@ export async function chat(message) {
       }
     }
     if (propsToShow.length === 0) {
+      const baseText = neighborhood
+        ? `Je n'ai pas trouvé de bien à *${neighborhood}* pour le moment.`
+        : `Je n'ai pas trouvé de biens correspondant à votre demande pour le moment.`;
       return {
         intent: 'search',
-        text: neighborhood
-          ? `Je n'ai pas trouvé de bien à *${neighborhood}* pour le moment. Contactez-nous pour un recherche personnalisée :`
-          : `Je n'ai pas trouvé de biens correspondant à votre demande pour le moment. Voulez-vous voir d'autres catégories ?`,
-        suggestions: listCategories().slice(0, 6).map((c) => c.name),
+        text: `${baseText} Contactez-nous pour une recherche personnalisée :`,
+        suggestions: listCategories().slice(0, 6).map((c) => c.name).concat(['Contact']),
+        whatsappLink: `https://api.whatsapp.com/send?phone=${AGENCY.whatsapp}&text=${encodeURIComponent("Bonjour, je cherche un bien immobilier. Pouvez-vous m'aider ?")}`,
       };
     }
     let introText;
@@ -211,9 +274,20 @@ export async function chat(message) {
       introText = `Aucun bien ${what} pour le moment. Voici ${propsToShow.length} biens disponibles qui pourraient vous intéresser :`;
     } else if (neighborhood && !neighborhoodMatched) {
       introText = `Pas de bien à *${neighborhood}* actuellement, mais voici ${propsToShow.length} biens similaires disponibles :`;
+    } else if (price) {
+      introText = `Biens sous ${price.max.toLocaleString('fr-FR')} ${price.currency} (vérifiez les détails pour le prix exact) — ${propsToShow.length} disponibles :`;
     } else {
       introText = `Voici ${propsToShow.length} ${title.toLowerCase()} disponible${propsToShow.length > 1 ? 's' : ''} :`;
     }
+    // Always suggest contact for serious inquiries
+    const suggestions = ['Plus de détails', 'Voir les riads', 'Contact'];
+    if (propsToShow.length >= 3) suggestions.unshift('Prendre rendez-vous');
+    // Attach WhatsApp CTA when filter didn't perfectly match or for serious inquiries
+    const attachCTA =
+      fellBack ||
+      (neighborhood && !neighborhoodMatched) ||
+      price ||
+      propsToShow.length >= 5;
     return {
       intent: 'search',
       text: introText,
@@ -227,7 +301,10 @@ export async function chat(message) {
         kind: p.kind,
         type: p.type,
       })),
-      suggestions: ['Plus de détails', 'Voir les riads', 'Contact'],
+      suggestions,
+      whatsappLink: attachCTA
+        ? `https://api.whatsapp.com/send?phone=${AGENCY.whatsapp}&text=${encodeURIComponent("Bonjour, je suis intéressé par un bien immobilier. Pouvez-vous m'aider ?")}`
+        : undefined,
     };
   }
 
