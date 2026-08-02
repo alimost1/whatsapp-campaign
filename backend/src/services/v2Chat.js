@@ -45,6 +45,15 @@ const SYNONYMS = {
   surface: ['surface', 'm²', 'm2', 'مساحة', 'مساحة'],
 };
 
+// Neighborhoods in Marrakech (FR/AR/EN)
+const NEIGHBORHOODS = [
+  'gueliz', 'guéliz', 'medina', 'médina', 'hivernage', 'palmeraie', 'palmeraies',
+  'ourika', 'amizmiz', 'agdal', 'alouidane', 'targa', 'mhamid', 'sidi abbad',
+  'sidi ghanem', 'sidi maarouf', 'souissi', 'daoudiate', 'boufakrane',
+  'massira', 'hay riad', 'hay mohammadi', 'ennassim', 'kh sabbah',
+  'سيدي أبي', 'أكدال', 'غليز', 'النخيل', 'حاحة', 'مراكش المدينة',
+];
+
 // Detect intent tokens
 function hasAny(text, group) {
   const t = text.toLowerCase();
@@ -55,6 +64,14 @@ function extractNumber(text, key) {
   const re = new RegExp(`(\\d{1,5})\\s*${key}`, 'i');
   const m = text.match(re);
   return m ? +m[1] : null;
+}
+
+function detectNeighborhood(text) {
+  const lower = text.toLowerCase();
+  for (const n of NEIGHBORHOODS) {
+    if (lower.includes(n.toLowerCase())) return n;
+  }
+  return null;
 }
 
 export async function chat(message) {
@@ -133,32 +150,74 @@ export async function chat(message) {
   // Even if user only said one of (type, kind), still do a search
   const minBedrooms = extractNumber(text, 'chambre') || extractNumber(text, 'bedroom');
   const minSurface = extractNumber(text, 'm') || extractNumber(text, 'm²') || extractNumber(text, 'surface');
+  const neighborhood = detectNeighborhood(text);
 
-  if (type || kind || text.match(/propose|dispo|cherche|voulez|vendez|louer|vendre/i)) {
-    const props = await searchProperties({
+  if (type || kind || neighborhood || text.match(/propose|dispo|cherche|voulez|vendez|louer|vendre/i)) {
+    let props = await searchProperties({
       type,
       kind,
       minBedrooms,
       minSurface,
       limit: 12,
     });
+    // If user asked for a type/kind that has 0 listings, fall back to all categories
+    // and surface the original filter in the intro so the customer understands.
+    let fellBack = false;
+    if (props.length === 0 && (type || kind)) {
+      props = await searchProperties({
+        type: null,
+        kind: null,
+        minBedrooms,
+        minSurface,
+        limit: 12,
+      });
+      fellBack = true;
+    }
     const title =
       type && kind
         ? `${kind === 'achat' ? 'À vendre' : kind === 'location' ? 'À louer' : 'Programme'} : ${type}`
         : type ? `Biens de type ${type}`
         : kind ? `Biens en ${kind}`
+        : neighborhood ? `Biens à ${neighborhood}`
         : 'Biens disponibles';
-    if (props.length === 0) {
+    // Decide which set of properties to show:
+    //   - If neighborhood filter found matches, use them
+    //   - Otherwise fall back to all properties in matching type/kind
+    let neighborhoodMatched = false;
+    let propsToShow = props;
+    if (neighborhood) {
+      const needle = neighborhood.toLowerCase();
+      const filtered = props.filter((p) => {
+        const haystack = `${p.title || ''} ${p.url || ''} ${p.description || ''}`.toLowerCase();
+        return haystack.includes(needle);
+      });
+      if (filtered.length > 0) {
+        propsToShow = filtered;
+        neighborhoodMatched = true;
+      }
+    }
+    if (propsToShow.length === 0) {
       return {
         intent: 'search',
-        text: `Je n'ai pas trouvé de biens correspondant à votre demande pour le moment. Voulez-vous voir d'autres catégories ?`,
+        text: neighborhood
+          ? `Je n'ai pas trouvé de bien à *${neighborhood}* pour le moment. Contactez-nous pour un recherche personnalisée :`
+          : `Je n'ai pas trouvé de biens correspondant à votre demande pour le moment. Voulez-vous voir d'autres catégories ?`,
         suggestions: listCategories().slice(0, 6).map((c) => c.name),
       };
     }
+    let introText;
+    if (fellBack) {
+      const what = type ? `de ${type}` : kind ? `en ${kind}` : 'correspondant';
+      introText = `Aucun bien ${what} pour le moment. Voici ${propsToShow.length} biens disponibles qui pourraient vous intéresser :`;
+    } else if (neighborhood && !neighborhoodMatched) {
+      introText = `Pas de bien à *${neighborhood}* actuellement, mais voici ${propsToShow.length} biens similaires disponibles :`;
+    } else {
+      introText = `Voici ${propsToShow.length} ${title.toLowerCase()} disponible${propsToShow.length > 1 ? 's' : ''} :`;
+    }
     return {
       intent: 'search',
-      text: `Voici ${props.length} ${title.toLowerCase()} disponible${props.length > 1 ? 's' : ''} :`,
-      cards: props.map((p) => ({
+      text: introText,
+      cards: propsToShow.map((p) => ({
         id: p.id,
         title: p.title,
         surface: p.surface,

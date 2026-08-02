@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import axios from 'axios';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '../../data');
+const DATA_DIR = path.join(__dirname, '../../../data');
 const CACHE_FILE = path.join(DATA_DIR, 'promo_cache.json');
 const BASE = 'https://www.promoimmomarrakech.com';
 
@@ -139,7 +139,7 @@ export async function getCategory(category) {
 /**
  * Find properties matching free-text filters: type, max-price, min-bedrooms, etc.
  */
-export async function searchProperties({ type, kind, maxPrice, minBedrooms, minSurface, limit = 20 }) {
+export async function searchProperties({ type, kind, maxPrice, minBedrooms, minSurface, neighborhood, limit = 20 }) {
   const cats = listCategories().filter((c) => {
     if (type && c.type !== type && c.type !== '*') return false;
     if (kind && c.kind !== kind && c.type !== '*') return false;
