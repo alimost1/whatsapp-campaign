@@ -14,6 +14,7 @@ import {
   attributeReply,
   computeVariantReport,
 } from '../services/v2Attribution.js';
+import { handleWhatsAppMessage } from '../services/whatsappAssistant.js';
 import { ensureWebhook, getWebhook, buildWebhookUrl } from '../services/webhookConfig.js';
 import { chat as chatAssistant, listCategoriesAPI } from '../services/v2Chat.js';
 
@@ -45,11 +46,14 @@ const router = Router();
 
 // ── Webhook (public — Evolution API posts here, no JWT) ──────────────────
 // POST /api/v2/webhooks/evolution — receives incoming WhatsApp messages from Evolution API
-// Body shape: { event: 'messages.upsert', instance: 'xxx', data: { key: {...}, message: {...}, ... } }
+// Body shape: { event: 'messages.upsert' (or 'MESSAGES_UPSERT'), instance: 'xxx', data: { key: {...}, message: {...}, ... } }
+//
+// Two things happen for every incoming message:
+//   1. attribution: match the phone to a recent campaign → log as a variant reply
+//   2. assistant:   reply via the chat assistant (fire-and-forget, async)
 router.post('/webhooks/evolution', (req, res) => {
   const body = req.body || {};
   const event = body.event;
-  // Evolution may send either 'messages.upsert' (lowercase) or 'MESSAGES_UPSERT' (uppercase enum)
   if (event !== 'messages.upsert' && event !== 'MESSAGES_UPSERT') {
     return res.json({ ignored: event });
   }
@@ -64,9 +68,19 @@ router.post('/webhooks/evolution', (req, res) => {
   const messageId = body?.data?.key?.id || null;
   const pushName = body?.data?.pushName || null;
 
-  const result = attributeReply({ phone, instanceName, messageId, pushName, text });
-  if (!result) return res.json({ attributed: false, phone, instanceName });
-  res.json({ attributed: true, phone, instanceName, ...result });
+  // 1. Attribution (synchronous — caller wants the result)
+  const attribution = attributeReply({ phone, instanceName, messageId, pushName, text });
+
+  // 2. Assistant reply (async, fire-and-forget) — only for direct chat messages
+  handleWhatsAppMessage({ ...body, instance: instanceName })
+    .then((r) => {
+      if (r.replied) console.log(`[webhook] assistant replied: ${r.intent}`);
+      else console.log(`[webhook] assistant skipped: ${r.reason}`);
+    })
+    .catch((e) => console.error('[webhook] assistant error:', e.message));
+
+  if (!attribution) return res.json({ attributed: false, phone, instanceName });
+  res.json({ attributed: true, phone, instanceName, ...attribution });
 });
 
 router.use(requireAuth);
