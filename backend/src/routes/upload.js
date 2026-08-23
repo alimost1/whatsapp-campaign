@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import fs from 'fs';
 import db from '../db.js';
 import { requireAuth } from '../auth.js';
+import { toWhatsAppNumber } from '../utils/phone.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = path.join(__dirname, '../../uploads/contacts');
@@ -93,7 +94,8 @@ router.post('/', upload.single('file'), async (req, res) => {
     }
   }
 
-  // Case-insensitive phone column lookup — check multiple common headers
+  // Case-insensitive phone column lookup — check multiple common headers.
+  // Numbers are normalized to WhatsApp MSISDN at import time (06… → 212…).
   const getPhone = (row) => {
     const val =
       row.phone ||
@@ -103,10 +105,8 @@ router.post('/', upload.single('file'), async (req, res) => {
       row.Mobile ||
       row.MOBILE ||
       row['رقم الهاتف'] ||
-      row.Mobile || // Mobile variant
       '';
-    // Strip non-digits, replace leading 00 with +
-    return String(val).replace(/\D/g, '').replace(/^00/, '+');
+    return toWhatsAppNumber(val);
   };
 
   let imported = 0;
@@ -119,7 +119,7 @@ router.post('/', upload.single('file'), async (req, res) => {
   const importMany = db.transaction(() => {
     for (const row of rows) {
       const phone = getPhone(row);
-      if (!phone || phone.length < 8) {
+      if (!phone || phone.length < 10) {
         skipped++;
         continue;
       }

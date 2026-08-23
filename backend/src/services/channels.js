@@ -5,6 +5,7 @@
  */
 import axios from 'axios';
 import 'dotenv/config';
+import { toWhatsAppNumber } from '../utils/phone.js';
 
 function getEvolutionUrl() {
   return (process.env.EVOLUTION_API_URL || '').replace(/\/+$/, '');
@@ -24,16 +25,12 @@ const client = axios.create({
   timeout: 30000,
 });
 
-function normalize(number) {
-  return String(number).replace(/[^0-9]/g, '');
-}
-
 /**
  * Send via Evolution API. Unofficial, supports images, no template restrictions.
  */
 export async function sendViaEvolution(instanceName, number, text) {
   const url = `${getEvolutionUrl()}/message/sendText/${instanceName}`;
-  const payload = { number: normalize(number), text, delay: 1500 };
+  const payload = { number: toWhatsAppNumber(number), text, delay: 1500 };
   const res = await client.post(url, payload, { headers: { apikey: getEvolutionKey() } });
   return {
     ok: true,
@@ -52,7 +49,7 @@ export async function sendViaCloudApi(number, text) {
   const url = `https://graph.facebook.com/v20.0/${getCloudPhoneId()}/messages`;
   const payload = {
     messaging_product: 'whatsapp',
-    to: normalize(number),
+    to: toWhatsAppNumber(number),
     type: 'text',
     text: { body: text },
   };
@@ -69,27 +66,27 @@ export async function sendViaCloudApi(number, text) {
 
 /**
  * Dispatcher — picks channel based on config or explicit argument.
- /** Dispatcher — picks channel based on config or explicit argument. */
- export async function send({ channel, instanceName, number, text }) {
-   if (channel === 'cloud_api') return sendViaCloudApi(number, text);
-   if (channel === 'evolution') return sendViaEvolution(instanceName, number, text);
-   throw new Error(`Unknown channel: ${channel}`);
- }
+ */
+export async function send({ channel, instanceName, number, text }) {
+  if (channel === 'cloud_api') return sendViaCloudApi(number, text);
+  if (channel === 'evolution') return sendViaEvolution(instanceName, number, text);
+  throw new Error(`Unknown channel: ${channel}`);
+}
 
- /** Check if Evolution instance is connected. */
- export async function checkInstance(instanceName) {
-   try {
-     const url = `${getEvolutionUrl()}/instance/connectionState/${instanceName}`;
-     const res = await client.get(url, { headers: { apikey: getEvolutionKey() }, timeout: 8000 });
-     const state = res.data?.instance?.state || res.data?.state || '';
-     if (!['open'].includes(String(state).toLowerCase())) {
-       return [false, `WhatsApp not connected. Instance "${instanceName}" state: ${state || 'unknown'}. Please scan QR code first.`];
-     }
-     return [true, null];
-   } catch (e) {
-     const status = e.response?.status;
-     const msg = e.response?.data?.error || e.message;
-     const detail = status === 404 ? `Instance "${instanceName}" not found` : msg;
-     return [false, `Cannot reach Evolution API: ${detail}`];
-   }
- }
+/** Check if Evolution instance is connected. */
+export async function checkInstance(instanceName) {
+  try {
+    const url = `${getEvolutionUrl()}/instance/connectionState/${instanceName}`;
+    const res = await client.get(url, { headers: { apikey: getEvolutionKey() }, timeout: 8000 });
+    const state = res.data?.instance?.state || res.data?.state || '';
+    if (!['open'].includes(String(state).toLowerCase())) {
+      return [false, `WhatsApp not connected. Instance "${instanceName}" state: ${state || 'unknown'}. Please scan QR code first.`];
+    }
+    return [true, null];
+  } catch (e) {
+    const status = e.response?.status;
+    const msg = e.response?.data?.error || e.message;
+    const detail = status === 404 ? `Instance "${instanceName}" not found` : msg;
+    return [false, `Cannot reach Evolution API: ${detail}`];
+  }
+}
