@@ -1,13 +1,6 @@
 /**
  * v2 dispatcher — scans campaigns.jsonl for scheduled campaigns whose
  * scheduledAt is due, then sends them via the chosen channel.
- *
- * - One campaign at a time (anti-ban friendly; matches v1 worker policy).
- * - Splits A/B variants deterministically using a stable hash of contact
- *   phone + campaign id so groups are reproducible.
- * - Throttles ~1 msg/sec across the batch.
- * - Retries each contact once on failure, then marks failed.
- * - Persists every result back to campaigns.jsonl on each step.
  */
 import fs from 'fs';
 import crypto from 'crypto';
@@ -29,16 +22,10 @@ function readJsonl(file) {
     .filter((l) => l.trim())
     .map((l) => JSON.parse(l));
 }
-function writeJsonl(file, arr) {
-  const body = arr.map((x) => JSON.stringify(x)).join('\n') + '\n';
-  fs.writeFileSync(file, body);
-}
+
 function pickVariant(message, contactPhone, campaignId) {
   if (message && Array.isArray(message.variants)) {
-    const seed = crypto
-      .createHash('sha256')
-      .update(`${campaignId}:${contactPhone}`)
-      .digest();
+    const seed = crypto.createHash('sha256').update(`${campaignId}:${contactPhone}`).digest();
     const idx = seed.readUInt32BE(0) % message.variants.length;
     return { text: message.variants[idx], variant: String.fromCharCode(65 + idx) };
   }
@@ -50,22 +37,22 @@ function persistCampaign(updated) {
   const idx = all.findIndex((c) => c.id === updated.id);
   if (idx === -1) return;
   all[idx] = updated;
-  const body = all.map((c) => JSON.stringify(c)).join('\n') + '\n';
-  fs.writeFileSync(CAMPAIGNS_FILE, body);
+  fs.writeFileSync(CAMPAIGNS_FILE, all.map((c) => JSON.stringify(c)).join('\n') + '\n');
 }
 
 export async function dispatchCampaign(campaignId) {
-  const all = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
-  console.log(`[v2-dispatcher] dispatchCampaign(${campaignId}): found ${all.length} campaigns in file:`, all.map((c) => c.id));
-  const c = all.find((x) => x.id === campaignId);
+  const c = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id).find((x) => x.id === campaignId);
   if (!c) throw new Error(`Campaign ${campaignId} not found`);
   if (c.status === 'sent' || c.status === 'sending') return { skipped: 'already ' + c.status };
 
-  // Resolve target contacts (either explicit or tag-filtered)
-  let contacts = c.contacts;
-  if (!contacts || contacts.length === 0) {
-    contacts = filterContactsByTags(c);
-  }
+  // UI-created campaigns must always resolve current contacts. Only an
+  // explicitly marked manual target list is allowed to bypass the stores.
+  const contacts = c.manualTargets === true && Array.isArray(c.contacts)
+    ? normalizeAndDedupe(c.contacts)
+    : filterContactsByTags(c);
+
+  console.log(`[v2-dispatcher] campaign ${c.id} resolved ${contacts.length} targets:`, contacts.map((x) => x.phone));
+
   if (!contacts.length) {
     c.status = 'failed';
     c.error = 'no contacts resolved';
@@ -75,29 +62,23 @@ export async function dispatchCampaign(campaignId) {
 
   c.status = 'sending';
   c.startedAt = new Date().toISOString();
-  c.sentLog = c.sentLog || [];
+  c.sentLog = [];
+  c.targetCount = contacts.length;
   persistCampaign(c);
 
   let sent = 0;
   let failed = 0;
 
   for (const contact of contacts) {
-    const phone = contact.phone || contact;
+    const phone = contact.phone;
     const { text, variant } = pickVariant(c.message, phone, c.id);
-
     let attempt = 0;
     let lastError = null;
+
     while (attempt < 2) {
       try {
-        await send({
-          channel: c.channel,
-          instanceName: c.instanceName,
-          number: phone,
-          text,
-        });
-        c.sentLog.push({
-          phone, variant, status: 'sent', at: new Date().toISOString(),
-        });
+        await send({ channel: c.channel, instanceName: c.instanceName, number: phone, text });
+        c.sentLog.push({ phone, variant, status: 'sent', at: new Date().toISOString() });
         sent++;
         lastError = null;
         break;
@@ -107,16 +88,13 @@ export async function dispatchCampaign(campaignId) {
         if (attempt < 2) await new Promise((r) => setTimeout(r, 2000));
       }
     }
+
     if (lastError) {
-      c.sentLog.push({
-        phone, variant, status: 'failed', error: lastError.slice(0, 200),
-        at: new Date().toISOString(),
-      });
+      c.sentLog.push({ phone, variant, status: 'failed', error: lastError.slice(0, 200), at: new Date().toISOString() });
       failed++;
     }
     persistCampaign(c);
 
-    // Throttle ~1 msg/sec between contacts
     const { delay } = computeDelay(sent, failed);
     await new Promise((r) => setTimeout(r, Math.min(delay, 5000)));
   }
@@ -125,60 +103,54 @@ export async function dispatchCampaign(campaignId) {
   c.completedAt = new Date().toISOString();
   c.summary = { sent, failed, total: contacts.length };
   persistCampaign(c);
-
   return { sent, failed, total: contacts.length };
 }
 
+function normalizeAndDedupe(contacts) {
+  const seen = new Set();
+  return contacts.map((contact) => {
+    const phone = toWhatsAppNumber(contact.phone || contact);
+    return { ...(typeof contact === 'object' ? contact : {}), phone };
+  }).filter((contact) => {
+    if (!contact.phone || contact.phone.length < 10 || seen.has(contact.phone)) return false;
+    seen.add(contact.phone);
+    return true;
+  });
+}
+
 function filterContactsByTags(campaign) {
-  // Contacts live in two stores:
-  //  - data/contacts.jsonl   (v2 lead store, tags supported)
-  //  - SQLite contacts table (map-com UI: manual imports + Google Maps scraper)
-  // Merge both so campaigns reach everyone, deduped by normalized phone.
   const contactsFile = path.join(DATA_DIR, 'contacts.jsonl');
   const jsonlContacts = readJsonl(contactsFile).filter((d) => d.phone);
-
   let sqlContacts = [];
+
   try {
-    sqlContacts = db
-      .prepare('SELECT name, phone, group_name FROM contacts WHERE phone IS NOT NULL')
-      .all()
-      .map((c) => ({
-        name: c.name,
-        phone: c.phone,
-        tags: c.group_name ? [c.group_name] : [],
-        source: 'sqlite',
-      }));
+    sqlContacts = db.prepare(
+      'SELECT name, phone, group_name FROM contacts WHERE phone IS NOT NULL'
+    ).all().map((contact) => ({
+      name: contact.name,
+      phone: contact.phone,
+      tags: contact.group_name ? [contact.group_name] : [],
+      source: 'sqlite',
+    }));
   } catch (e) {
     console.error('[v2-dispatcher] failed to read SQLite contacts:', e.message);
   }
 
-  const seen = new Set();
-  const all = [];
-  for (const contact of [...jsonlContacts, ...sqlContacts]) {
-    const phone = toWhatsAppNumber(contact.phone);
-    if (!phone || phone.length < 10 || seen.has(phone)) continue;
-    seen.add(phone);
-    all.push({ ...contact, phone });
-  }
-
+  const all = normalizeAndDedupe([...jsonlContacts, ...sqlContacts]);
   const tags = campaign.targetTags || [];
   if (!tags.length) return all;
+
   return all.filter((contact) => {
-    const t = contact.tags || [];
-    if (campaign.targetTagMode === 'AND') return tags.every((tag) => t.includes(tag));
-    return tags.some((tag) => t.includes(tag));
+    const contactTags = contact.tags || [];
+    if (campaign.targetTagMode === 'AND') return tags.every((tag) => contactTags.includes(tag));
+    return tags.some((tag) => contactTags.includes(tag));
   });
 }
 
-/**
- * Tick — called by the cron scheduler every minute.
- * Dispatches any scheduled campaign whose scheduledAt has passed and is still pending.
- */
 export async function tick() {
   const all = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
   const now = new Date();
   for (const c of all) {
-    // pending = awaiting scheduled fire; queued = awaiting immediate send-now
     if (c.status !== 'pending' && c.status !== 'queued') continue;
     if (c.status === 'pending' && (!c.scheduledAt || new Date(c.scheduledAt) > now)) continue;
     console.log(`[v2-dispatcher] firing campaign ${c.id} (${c.name})`);
