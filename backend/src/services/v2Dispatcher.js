@@ -13,9 +13,10 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { send } from './channels.js';
 import { computeDelay } from './antiSpam.js';
-import { ensureWebhook } from './webhookConfig.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import db from '../db.js';
+import { toWhatsAppNumber } from '../utils/phone.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../../data');
@@ -59,13 +60,6 @@ export async function dispatchCampaign(campaignId) {
   const c = all.find((x) => x.id === campaignId);
   if (!c) throw new Error(`Campaign ${campaignId} not found`);
   if (c.status === 'sent' || c.status === 'sending') return { skipped: 'already ' + c.status };
-
-  // Safety net: ensure webhook is configured for reply attribution
-  if (c.instanceName) {
-    ensureWebhook(c.instanceName).catch((e) =>
-      console.error(`[v2-dispatcher] webhook config failed for ${c.instanceName}:`, e.message)
-    );
-  }
 
   // Resolve target contacts (either explicit or tag-filtered)
   let contacts = c.contacts;
@@ -136,8 +130,37 @@ export async function dispatchCampaign(campaignId) {
 }
 
 function filterContactsByTags(campaign) {
+  // Contacts live in two stores:
+  //  - data/contacts.jsonl   (v2 lead store, tags supported)
+  //  - SQLite contacts table (map-com UI: manual imports + Google Maps scraper)
+  // Merge both so campaigns reach everyone, deduped by normalized phone.
   const contactsFile = path.join(DATA_DIR, 'contacts.jsonl');
-  const all = readJsonl(contactsFile).filter((d) => d.phone);
+  const jsonlContacts = readJsonl(contactsFile).filter((d) => d.phone);
+
+  let sqlContacts = [];
+  try {
+    sqlContacts = db
+      .prepare('SELECT name, phone, group_name FROM contacts WHERE phone IS NOT NULL')
+      .all()
+      .map((c) => ({
+        name: c.name,
+        phone: c.phone,
+        tags: c.group_name ? [c.group_name] : [],
+        source: 'sqlite',
+      }));
+  } catch (e) {
+    console.error('[v2-dispatcher] failed to read SQLite contacts:', e.message);
+  }
+
+  const seen = new Set();
+  const all = [];
+  for (const contact of [...jsonlContacts, ...sqlContacts]) {
+    const phone = toWhatsAppNumber(contact.phone);
+    if (!phone || phone.length < 10 || seen.has(phone)) continue;
+    seen.add(phone);
+    all.push({ ...contact, phone });
+  }
+
   const tags = campaign.targetTags || [];
   if (!tags.length) return all;
   return all.filter((contact) => {
