@@ -7,6 +7,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import axios from 'axios';
+import jwt from 'jsonwebtoken';
+import db from '../db.js';
 import { requireAuth } from '../auth.js';
 import { dispatchCampaign } from '../services/v2Dispatcher.js';
 import {
@@ -15,9 +18,11 @@ import {
   computeVariantReport,
 } from '../services/v2Attribution.js';
 import { handleWhatsAppMessage, tickFollowUps } from '../services/whatsappAssistant.js';
+import { checkInstance } from '../services/channels.js';
 import { listAllLeads } from '../services/leadCapture.js';
 import { ensureWebhook, getWebhook, buildWebhookUrl } from '../services/webhookConfig.js';
 import { chat as chatAssistant, listCategoriesAPI } from '../services/v2Chat.js';
+import { startScrapingJob, getJobStatus } from '../services/scraperApi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../../data');
@@ -82,6 +87,82 @@ router.post('/webhooks/evolution', (req, res) => {
 
   if (!attribution) return res.json({ attributed: false, phone, instanceName });
   res.json({ attributed: true, phone, instanceName, ...attribution });
+});
+
+// GET /api/v2/test — test endpoint
+router.get('/test', (req, res) => {
+  res.json({ ok: true, message: 'v2 router working' });
+});
+
+// GET /api/v2/health — public health check
+router.get('/health', (req, res) => {
+  res.json({ status: 'ok', ts: new Date().toISOString() });
+});
+
+// GET /api/v2/auth/me — get current user info
+router.get('/auth/me', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token' });
+  }
+  const token = authHeader.slice(7);
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const user = db.prepare('SELECT id, email, name FROM users WHERE id = ?').get(payload.userId);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    res.json({ userId: user.id, email: user.email, name: user.name });
+  } catch (e) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+// ── WhatsApp Test (public) ──────────────────────────────────
+// POST /api/v2/whatsapp/test — send test message via Evolution API
+router.post('/whatsapp/test', async (req, res) => {
+  try {
+    const { instance, number, message } = req.body;
+    if (!instance || !number || !message) {
+      return res.status(400).json({ error: 'instance, number, and message are required' });
+    }
+
+    const [ok, errMsg] = await checkInstance(instance);
+    if (!ok) return res.status(400).json({ error: errMsg });
+
+    const { EVOLUTION_API_URL, EVOLUTION_API_KEY } = process.env;
+    const response = await axios.post(
+      `${EVOLUTION_API_URL}/message/sendText/${instance}`,
+      { number, text: message, delay: 1000 },
+      { headers: { apikey: EVOLUTION_API_KEY, 'Content-Type': 'application/json' }, timeout: 15000 }
+    );
+
+    res.json({ ok: true, messageId: response.data?.key?.id });
+  } catch (e) {
+    const status = e.response?.status;
+    const msg = e.response?.data?.error || e.message;
+    res.status(500).json({ error: `Failed to send: ${msg}` });
+  }
+});
+
+// ── Google Maps Scraper (public) ────────────────────────────
+// POST /api/v2/scraper/google-maps — start a scraping job
+router.post('/scraper/google-maps', async (req, res) => {
+  try {
+    const { category, location, maxResults, headless } = req.body;
+    if (!category || !location) {
+      return res.status(400).json({ error: 'category and location are required' });
+    }
+    const result = await startScrapingJob({ category, location, maxResults, headless });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/v2/scraper/status/:jobId — get job status/results
+router.get('/scraper/status/:jobId', (req, res) => {
+  const job = getJobStatus(req.params.jobId);
+  if (job.error) return res.status(404).json(job);
+  res.json(job);
 });
 
 router.use(requireAuth);
@@ -180,6 +261,23 @@ router.get('/campaigns/:cid', (req, res) => {
   res.json(c);
 });
 
+router.delete('/campaigns/:cid', (req, res) => {
+  const campaigns = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
+  const next = campaigns.filter((c) => c.id !== req.params.cid);
+  writeJsonl(CAMPAIGNS_FILE, next);
+  res.json({ deleted: campaigns.length - next.length });
+});
+
+router.put('/campaigns/:cid', (req, res) => {
+  const campaigns = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
+  const idx = campaigns.findIndex((c) => c.id === req.params.cid);
+  if (idx === -1) return res.status(404).json({ error: 'not found' });
+  const updated = { ...campaigns[idx], ...req.body, id: campaigns[idx].id, createdAt: campaigns[idx].createdAt };
+  campaigns[idx] = updated;
+  writeJsonl(CAMPAIGNS_FILE, campaigns);
+  res.json(updated);
+});
+
 // POST /api/v2/campaigns/:cid/send-now — kick off dispatch immediately (no waiting for cron)
 router.post('/campaigns/:cid/send-now', async (req, res) => {
   const campaigns = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
@@ -223,6 +321,58 @@ router.get('/campaigns/:cid/results', (req, res) => {
   const report = computeVariantReport(req.params.cid);
   if (!report) return res.status(404).json({ error: 'campaign not found' });
   res.json(report);
+});
+
+// GET /api/v2/logs — get recent send logs for user's campaigns
+router.get('/logs', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    let allLogs = [];
+    
+    // 1. Get logs from SQLite campaigns (v1)
+    const campaignIds = db.prepare('SELECT id FROM campaigns WHERE user_id = ?').all(req.userId).map(c => c.id);
+    if (campaignIds.length > 0) {
+      const placeholders = campaignIds.map(() => '?').join(',');
+      const sqlLogs = db.prepare(`
+        SELECT sl.*, c.name as campaign_name
+        FROM send_logs sl
+        JOIN campaigns c ON sl.campaign_id = c.id
+        WHERE sl.campaign_id IN (${placeholders})
+        ORDER BY sl.sent_at DESC
+        LIMIT ?
+      `).all(...campaignIds, limit);
+      allLogs.push(...sqlLogs);
+    }
+    
+    // 2. Get logs from JSONL campaigns (v2)
+    const v2Campaigns = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
+    for (const campaign of v2Campaigns) {
+      if (campaign.sentLog && Array.isArray(campaign.sentLog)) {
+        for (const log of campaign.sentLog) {
+          allLogs.push({
+            id: log.id || `${campaign.id}-${log.variant}-${log.at}`,
+            campaign_id: campaign.id,
+            campaign_name: campaign.name,
+            phone: log.phone,
+            variant: log.variant,
+            status: log.status,
+            error_message: log.error,
+            sent_at: log.at,
+            level: log.status === 'sent' ? 'info' : 'error',
+            message: log.status === 'sent' ? `Message sent to ${log.phone} (${log.variant})` : `Failed to send to ${log.phone}: ${log.error}`,
+            meta: { variant: log.variant }
+          });
+        }
+      }
+    }
+    
+    // Sort by sent_at descending and limit
+    allLogs.sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at));
+    res.json(allLogs.slice(0, limit));
+  } catch (e) {
+    console.error('Failed to fetch logs:', e);
+    res.status(500).json({ error: 'Failed to fetch logs' });
+  }
 });
 
 // ── Chat assistant (Promo Immo Marrakech) ─────────────────
