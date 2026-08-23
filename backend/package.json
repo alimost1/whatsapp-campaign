@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "create-admin": "node scripts/create-admin.mjs"
   },
   "dependencies": {
     "axios": "^1.6.0",

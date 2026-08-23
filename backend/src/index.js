@@ -26,10 +26,10 @@ app.use((req, res, next) => {
   console.log('Request path:', req.path);
   console.log('Origin header:', origin);
   console.log('Allowed origins:', allowedOrigins);
-  
+
   if (req.method === 'OPTIONS') {
     console.log('Preflight request detected');
-    
+
     if (!origin) {
       console.log('No origin header - allowing');
       res.set('Access-Control-Allow-Origin', '*');
@@ -39,7 +39,7 @@ app.use((req, res, next) => {
       res.set('Vary', 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers');
       return res.status(204).end();
     }
-    
+
     if (allowedOrigins.includes(origin)) {
       console.log('Origin allowed - echoing back');
       res.set('Access-Control-Allow-Origin', origin);
@@ -53,14 +53,14 @@ app.use((req, res, next) => {
       return res.status(403).json({ error: 'CORS: Origin not allowed' });
     }
   }
-  
+
   // For non-OPTIONS requests, set CORS headers
   if (origin && allowedOrigins.includes(origin)) {
     res.set('Access-Control-Allow-Origin', origin);
     res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Vary', 'Origin');
   }
-  
+
   next();
 });
 
@@ -82,9 +82,14 @@ import { resumeInterruptedCampaigns } from './services/campaignWorker.js';
 import { tick as v2Tick } from './services/v2Dispatcher.js';
 import { tickFollowUps } from './services/whatsappAssistant.js';
 
+// v2 mounts (canonical)
 app.use('/api/v2/auth', authRouter);
 app.use('/api/v2/contacts', contactsRouter);
 app.use('/api/v2/contacts/upload', uploadRouter);
+// Backward-compat mounts — older frontend builds and the v1 SPA call /api/*
+app.use('/api/auth', authRouter);
+app.use('/api/contacts', contactsRouter);
+app.use('/api/contacts/upload', uploadRouter);
 app.use('/api/campaigns', campaignsRouter);
 app.use('/api/campaigns', sendRouter);
 app.use('/api/v2', v2Router);
@@ -108,21 +113,15 @@ fs.mkdirSync(path.join(uploadsDir, 'media'), { recursive: true });
 // Resume any campaigns that were mid-send when the server stopped
 resumeInterruptedCampaigns();
 
-// v2 dispatcher — poll every minute for scheduled campaigns due now
+// v2 dispatcher: fire scheduled campaigns every 60s
 setInterval(() => {
-  v2Tick().catch((e) => console.error('[v2-dispatcher tick]', e.message));
+  v2Tick().catch((e) => console.error('[v2 tick]', e.message));
 }, 60_000);
-console.log('[v2-dispatcher] scheduled-tick interval started (every 60s)');
 
-// v2 follow-ups — poll every hour for stale chat leads (24h+ since last contact)
+// WhatsApp assistant: lead follow-up tick every hour
 setInterval(() => {
-  tickFollowUps()
-    .then((r) => {
-      if (r.sent > 0) console.log(`[follow-ups] sent ${r.sent} follow-up messages`);
-    })
-    .catch((e) => console.error('[follow-ups tick]', e.message));
-}, 60 * 60_000); // 1 hour
-console.log('[follow-ups] tick interval started (every hour)');
+  tickFollowUps().catch((e) => console.error('[followups]', e.message));
+}, 60 * 60 * 1000);
 
 app.listen(PORT, () => {
   console.log(`WhatsApp Campaign API + Frontend running on port ${PORT}`);
