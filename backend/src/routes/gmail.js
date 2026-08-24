@@ -6,6 +6,14 @@ const router = Router();
 
 router.get('/status', requireAuth, (req, res) => res.json({ connected: isConnected() }));
 
+// Return the Google authorization URL through an authenticated XHR request.
+// Navigating directly to /authorize cannot carry the Bearer token in a browser.
+router.get('/authorize-url', requireAuth, (req, res) => {
+  try { res.json({ url: authorizationUrl() }); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// Kept for direct/manual use; the frontend uses /authorize-url above.
 router.get('/authorize', requireAuth, (req, res) => {
   try { res.redirect(authorizationUrl()); }
   catch (error) { res.status(500).send(error.message); }
