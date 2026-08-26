@@ -1,27 +1,17 @@
 /**
- * v2 dispatcher — scans campaigns.jsonl for scheduled campaigns whose
- * scheduledAt is due, then sends them via the chosen channel.
+ * v2 dispatcher — scans SQLite campaigns table for scheduled campaigns whose
+ * scheduledAt is due, then sends them via the chosen channel with attachments.
  */
 import fs from 'fs';
-import crypto from 'crypto';
-import { send } from './channels.js';
-import { computeDelay } from './antiSpam.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
+import { sendMedia, sendText } from './channels.js';
+import { computeDelay } from './antiSpam.js';
 import db from '../db.js';
 import { toWhatsAppNumber } from '../utils/phone.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '../../../data');
-const CAMPAIGNS_FILE = path.join(DATA_DIR, 'campaigns.jsonl');
-
-function readJsonl(file) {
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8')
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l));
-}
 
 function pickVariant(message, contactPhone, campaignId) {
   if (message && Array.isArray(message.variants)) {
@@ -32,53 +22,123 @@ function pickVariant(message, contactPhone, campaignId) {
   return { text: String(message || ''), variant: 'A' };
 }
 
-function persistCampaign(updated) {
-  const all = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
-  const idx = all.findIndex((c) => c.id === updated.id);
-  if (idx === -1) return;
-  all[idx] = updated;
-  fs.writeFileSync(CAMPAIGNS_FILE, all.map((c) => JSON.stringify(c)).join('\n') + '\n');
+function getMediaType(mimeType) {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType === 'application/pdf') return 'document';
+  if (mimeType.includes('word') || mimeType.includes('document')) return 'document';
+  if (mimeType.includes('excel') || mimeType.includes('spreadsheet')) return 'document';
+  if (mimeType.includes('powerpoint') || mimeType.includes('presentation')) return 'document';
+  if (mimeType === 'text/plain') return 'document';
+  return 'document';
 }
 
 export async function dispatchCampaign(campaignId) {
-  const c = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id).find((x) => x.id === campaignId);
-  if (!c) throw new Error(`Campaign ${campaignId} not found`);
-  if (c.status === 'sent' || c.status === 'sending') return { skipped: 'already ' + c.status };
+  // Fetch campaign from SQLite
+  const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(campaignId);
+  if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
+  if (campaign.status === 'sent' || campaign.status === 'completed' || campaign.status === 'sending') {
+    return { skipped: 'already ' + campaign.status };
+  }
 
-  // UI-created campaigns must always resolve current contacts. Only an
-  // explicitly marked manual target list is allowed to bypass the stores.
-  const contacts = c.manualTargets === true && Array.isArray(c.contacts)
-    ? normalizeAndDedupe(c.contacts)
-    : filterContactsByTags(c);
+  // Fetch attachments
+  const attachments = db.prepare(`
+    SELECT id, file_path, original_name, mime_type, size
+    FROM campaign_attachments
+    WHERE campaign_id = ?
+    ORDER BY created_at
+  `).all(campaignId);
 
-  console.log(`[v2-dispatcher] campaign ${c.id} resolved ${contacts.length} targets:`, contacts.map((x) => x.phone));
+  // Resolve contacts from SQLite
+  let contacts = [];
+  if (campaign.contact_group) {
+    contacts = db.prepare(`
+      SELECT id, name, phone FROM contacts 
+      WHERE user_id = ? AND group_name = ? AND phone IS NOT NULL
+    `).all(campaign.user_id, campaign.contact_group);
+  } else {
+    contacts = db.prepare(`
+      SELECT id, name, phone FROM contacts 
+      WHERE user_id = ? AND phone IS NOT NULL
+    `).all(campaign.user_id);
+  }
+
+  // Normalize and deduplicate
+  const seen = new Set();
+  contacts = contacts
+    .map((contact) => ({
+      ...contact,
+      phone: toWhatsAppNumber(contact.phone)
+    }))
+    .filter((contact) => {
+      if (!contact.phone || contact.phone.length < 10 || seen.has(contact.phone)) return false;
+      seen.add(contact.phone);
+      return true;
+    });
+
+  console.log(`[v2-dispatcher] campaign ${campaign.id} resolved ${contacts.length} targets`);
 
   if (!contacts.length) {
-    c.status = 'failed';
-    c.error = 'no contacts resolved';
-    persistCampaign(c);
+    db.prepare('UPDATE campaigns SET status = ?, error = ?, completedAt = ? WHERE id = ?')
+      .run('failed', 'no contacts resolved', new Date().toISOString(), campaignId);
     return { skipped: 'no contacts' };
   }
 
-  c.status = 'sending';
-  c.startedAt = new Date().toISOString();
-  c.sentLog = [];
-  c.targetCount = contacts.length;
-  persistCampaign(c);
+  // Update campaign status to sending
+  db.prepare('UPDATE campaigns SET status = ?, startedAt = ?, total_contacts = ? WHERE id = ?')
+    .run('sending', new Date().toISOString(), contacts.length, campaignId);
 
   let sent = 0;
   let failed = 0;
+  const sentLog = [];
 
   for (const contact of contacts) {
     const phone = contact.phone;
-    const { text, variant } = pickVariant(c.message, phone, c.id);
+    const { text, variant } = pickVariant(campaign.message_text, phone, campaignId);
     let attempt = 0;
     let lastError = null;
 
     while (attempt < 2) {
       try {
-        await send({ channel: c.channel, instanceName: c.instanceName, number: phone, text });
-        c.sentLog.push({ phone, variant, status: 'sent', at: new Date().toISOString() });
+        if (attachments.length > 0) {
+          // Send with attachments - send each attachment
+          for (const attachment of attachments) {
+            const filePath = path.join(__dirname, '../../uploads/campaigns', attachment.file_path);
+            if (!fs.existsSync(filePath)) {
+              throw new Error(`Attachment file not found: ${filePath}`);
+            }
+            
+            const fileBuffer = fs.readFileSync(filePath);
+            const base64Media = fileBuffer.toString('base64');
+            const mediaType = getMediaType(attachment.mime_type);
+            
+            await sendMedia({
+              channel: campaign.channel || 'evolution',
+              instanceName: campaign.instanceName || 'promo',
+              number: phone,
+              media: base64Media,
+              mediatype: mediaType,
+              mimetype: attachment.mime_type,
+              caption: text,
+              filename: attachment.original_name
+            });
+          }
+        } else {
+          // Send text only
+          await sendText({
+            channel: campaign.channel || 'evolution',
+            instanceName: campaign.instanceName || 'promo',
+            number: phone,
+            text
+          });
+        }
+        
+        sentLog.push({ 
+          contact_id: contact.id, 
+          phone, 
+          variant, 
+          status: 'sent', 
+          at: new Date().toISOString() 
+        });
         sent++;
         lastError = null;
         break;
@@ -90,74 +150,80 @@ export async function dispatchCampaign(campaignId) {
     }
 
     if (lastError) {
-      c.sentLog.push({ phone, variant, status: 'failed', error: lastError.slice(0, 200), at: new Date().toISOString() });
+      sentLog.push({ 
+        contact_id: contact.id, 
+        phone, 
+        variant, 
+        status: 'failed', 
+        error: lastError.slice(0, 200), 
+        at: new Date().toISOString() 
+      });
       failed++;
     }
-    persistCampaign(c);
 
+    // Save log to database
+    if (sentLog.length > 0) {
+      const lastLog = sentLog[sentLog.length - 1];
+      db.prepare(`
+        INSERT INTO send_logs (campaign_id, contact_id, phone, status, error_message, sent_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(campaignId, lastLog.contact_id || null, lastLog.phone, lastLog.status, lastLog.error || null, lastLog.at);
+    }
+
+    // Update progress in database
+    db.prepare('UPDATE campaigns SET sent_count = ?, failed_count = ? WHERE id = ?')
+      .run(sent, failed, campaignId);
+
+    // Delay between contacts
     const { delay } = computeDelay(sent, failed);
     await new Promise((r) => setTimeout(r, Math.min(delay, 5000)));
   }
 
-  c.status = failed === contacts.length ? 'failed' : 'sent';
-  c.completedAt = new Date().toISOString();
-  c.summary = { sent, failed, total: contacts.length };
-  persistCampaign(c);
+  // Update final campaign status
+  const completedAt = new Date().toISOString();
+  const status = failed === contacts.length ? 'failed' : (sent > 0 ? 'completed' : 'failed');
+  db.prepare(`
+    UPDATE campaigns
+    SET status = ?, completedAt = ?, sent_count = ?, failed_count = ?, sentLog = ?
+    WHERE id = ?
+  `).run(status, completedAt, sent, failed, JSON.stringify(sentLog), campaignId);
+
+  // Delete attachment files after sending (whether success or failure)
+  for (const attachment of attachments) {
+    const filePath = path.join(__dirname, '../../uploads/campaigns', attachment.file_path);
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (e) {
+        console.error(`Failed to delete attachment file ${filePath}:`, e.message);
+      }
+    }
+  }
+
   return { sent, failed, total: contacts.length };
 }
 
-function normalizeAndDedupe(contacts) {
-  const seen = new Set();
-  return contacts.map((contact) => {
-    const phone = toWhatsAppNumber(contact.phone || contact);
-    return { ...(typeof contact === 'object' ? contact : {}), phone };
-  }).filter((contact) => {
-    if (!contact.phone || contact.phone.length < 10 || seen.has(contact.phone)) return false;
-    seen.add(contact.phone);
-    return true;
-  });
-}
-
-function filterContactsByTags(campaign) {
-  const contactsFile = path.join(DATA_DIR, 'contacts.jsonl');
-  const jsonlContacts = readJsonl(contactsFile).filter((d) => d.phone);
-  let sqlContacts = [];
-
-  try {
-    sqlContacts = db.prepare(
-      'SELECT name, phone, group_name FROM contacts WHERE phone IS NOT NULL'
-    ).all().map((contact) => ({
-      name: contact.name,
-      phone: contact.phone,
-      tags: contact.group_name ? [contact.group_name] : [],
-      source: 'sqlite',
-    }));
-  } catch (e) {
-    console.error('[v2-dispatcher] failed to read SQLite contacts:', e.message);
-  }
-
-  const all = normalizeAndDedupe([...jsonlContacts, ...sqlContacts]);
-  const tags = campaign.targetTags || [];
-  if (!tags.length) return all;
-
-  return all.filter((contact) => {
-    const contactTags = contact.tags || [];
-    if (campaign.targetTagMode === 'AND') return tags.every((tag) => contactTags.includes(tag));
-    return tags.some((tag) => contactTags.includes(tag));
-  });
-}
-
 export async function tick() {
-  const all = readJsonl(CAMPAIGNS_FILE).filter((d) => d.id);
   const now = new Date();
-  for (const c of all) {
-    if (c.status !== 'pending' && c.status !== 'queued') continue;
-    if (c.status === 'pending' && (!c.scheduledAt || new Date(c.scheduledAt) > now)) continue;
-    console.log(`[v2-dispatcher] firing campaign ${c.id} (${c.name})`);
+  // Fetch campaigns that are due: status pending or queued and scheduledAt <= now (or scheduledAt is null)
+  const campaigns = db.prepare(`
+    SELECT id FROM campaigns
+    WHERE (status = 'pending' OR status = 'queued')
+      AND (scheduledAt IS NULL OR scheduledAt <= ?)
+  `).all(now.toISOString());
+
+  for (const { id } of campaigns) {
+    console.log(`[v2-dispatcher] firing campaign ${id}`);
     try {
-      await dispatchCampaign(c.id);
+      await dispatchCampaign(id);
     } catch (e) {
-      console.error(`[v2-dispatcher] campaign ${c.id} failed:`, e.message);
+      console.error(`[v2-dispatcher] campaign ${id} failed:`, e.message);
+      // Mark campaign as failed
+      db.prepare(`
+        UPDATE campaigns
+        SET status = ?, error = ?, completedAt = ?
+        WHERE id = ?
+      `).run('failed', e.message.slice(0, 200), new Date().toISOString(), id);
     }
   }
 }

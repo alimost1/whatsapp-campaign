@@ -26,11 +26,34 @@ const client = axios.create({
 });
 
 /**
- * Send via Evolution API. Unofficial, supports images, no template restrictions.
+ * Send text via Evolution API. Unofficial, supports images, no template restrictions.
  */
-export async function sendViaEvolution(instanceName, number, text) {
+export async function sendText({ instanceName, number, text }) {
   const url = `${getEvolutionUrl()}/message/sendText/${instanceName}`;
   const payload = { number: toWhatsAppNumber(number), text, delay: 1500 };
+  const res = await client.post(url, payload, { headers: { apikey: getEvolutionKey() } });
+  return {
+    ok: true,
+    channel: 'evolution',
+    instance: instanceName,
+    providerId: res.data?.key?.id,
+    raw: res.data,
+  };
+}
+
+/**
+ * Send media via Evolution API.
+ */
+export async function sendMedia({ instanceName, number, media, mediatype, mimetype, caption, filename }) {
+  const url = `${getEvolutionUrl()}/message/sendMedia/${instanceName}`;
+  const payload = {
+    number: toWhatsAppNumber(number),
+    mediatype,
+    mimetype,
+    media,
+    caption: caption || '',
+    fileName: filename || 'file'
+  };
   const res = await client.post(url, payload, { headers: { apikey: getEvolutionKey() } });
   return {
     ok: true,
@@ -69,7 +92,7 @@ export async function sendViaCloudApi(number, text) {
  */
 export async function send({ channel, instanceName, number, text }) {
   if (channel === 'cloud_api') return sendViaCloudApi(number, text);
-  if (channel === 'evolution') return sendViaEvolution(instanceName, number, text);
+  if (channel === 'evolution') return sendText({ instanceName, number, text });
   throw new Error(`Unknown channel: ${channel}`);
 }
 

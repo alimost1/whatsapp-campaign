@@ -1,305 +1,378 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import api from '../api';
-import { Users, Send, MessageSquare, Plus, LogOut, Wifi, WifiOff, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
+import { Users, Send, MessageSquare, Plus, CheckCircle, XCircle, RefreshCw, Clock, TrendingUp } from 'lucide-react';
 
-export default function Dashboard({ v2 } = {}) {
-  const [campaigns, setCampaigns] = useState([]);
-  const [contacts, setContacts] = useState([]);
+export default function Dashboard() {
+  const navigate = useNavigate();
+  const [stats, setStats] = useState({
+    contacts: 0,
+    todayContacts: 0,
+    campaigns: 0,
+    messagesSent: 0,
+    failedMessages: 0,
+    deliveryRate: 0
+  });
+  const [recentActivity, setRecentActivity] = useState([]);
+  const [campaignSummary, setCampaignSummary] = useState({
+    draft: 0,
+    pending: 0,
+    sending: 0,
+    completed: 0,
+    failed: 0
+  });
+  const [waStatus, setWaStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [instanceName, setInstanceName] = useState(() => localStorage.getItem('evolutionInstance') || '');
-  const [waStatus, setWaStatus] = useState(null); // null=unchecked, {connected, state, error}
-  const [checkingWA, setCheckingWA] = useState(false);
-  const userName = localStorage.getItem('userName') || 'User';
 
   useEffect(() => {
-    Promise.all([
-      api.get('/campaigns').catch(() => []),
-      api.get('/contacts').catch(() => []),
-    ])
-      .then(([cRes, ctRes]) => {
-        setCampaigns(cRes.data || []);
-        setContacts(ctRes.data || []);
-      })
-      .catch(() => setError('Failed to load data. Is the server running?'))
-      .finally(() => setLoading(false));
+    const fetchData = async () => {
+      try {
+        // Fetch stats
+        const statsResponse = await api.get('/api/stats');
+        setStats(statsResponse.data);
 
-    // Auto-check WhatsApp if instance name saved
-    if (localStorage.getItem('evolutionInstance')) {
-      checkWhatsApp(localStorage.getItem('evolutionInstance'));
-    }
+        // Fetch recent activity (from v2 logs endpoint)
+        const logsResponse = await api.get('/api/v2/logs?limit=10');
+        setRecentActivity(logsResponse.data);
+
+        // Fetch campaign summary
+        const campaignsResponse = await api.get('/api/campaigns');
+        const campaigns = campaignsResponse.data || [];
+        const summary = {
+          draft: campaigns.filter(c => c.status === 'draft').length,
+          pending: campaigns.filter(c => c.status === 'pending').length,
+          sending: campaigns.filter(c => c.status === 'sending').length,
+          completed: campaigns.filter(c => c.status === 'completed' || c.status === 'sent').length,
+          failed: campaigns.filter(c => c.status === 'failed').length
+        };
+        setCampaignSummary(summary);
+
+        // Fetch WhatsApp status if instance name exists
+        const instanceName = localStorage.getItem('evolutionInstance');
+        if (instanceName) {
+          try {
+            const waResponse = await api.get(`/campaigns/whatsapp/check?instanceName=${encodeURIComponent(instanceName)}`);
+            setWaStatus(waResponse.data);
+          } catch {
+            setWaStatus({ connected: false, state: 'error', error: 'Failed to check', instanceName });
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch dashboard data:', err);
+        setError('Failed to load dashboard data. Please check your connection.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
   }, []);
 
-  const checkWhatsApp = async (inst) => {
-    if (!inst) return;
-    setCheckingWA(true);
-    try {
-      const { data } = await api.get(`/campaigns/whatsapp/check?instanceName=${encodeURIComponent(inst)}`);
-      setWaStatus(data);
-    } catch {
-      setWaStatus({ connected: false, state: 'error', error: 'Server unreachable', instanceName: inst });
-    } finally {
-      setCheckingWA(false);
-    }
-  };
-
-  const saveInstance = () => {
-    const trimmed = instanceName.trim();
-    if (!trimmed) return;
-    localStorage.setItem('evolutionInstance', trimmed);
-    checkWhatsApp(trimmed);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userName');
-    window.location.href = '/login';
-  };
-
-  const statusBadge = (status) => {
-    const classes = {
-      draft: 'bg-gray-100 text-gray-700',
-      sending: 'bg-yellow-100 text-yellow-700',
-      completed: 'bg-green-100 text-green-700',
-      failed: 'bg-red-100 text-red-700',
-    };
+  if (loading) {
     return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${classes[status] || classes.draft}`}>
-        {status}
-      </span>
+      <div className="flex min-h-[calc(100vh-200px)] items-center justify-center bg-slate-50 dark:bg-slate-900">
+        <div className="text-center">
+          <div className="flex items-center justify-center mb-4">
+            <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div>
+          </div>
+          <p className="text-slate-500 dark:text-slate-400">Loading dashboard...</p>
+        </div>
+      </div>
     );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300">
+        <div className="flex items-center gap-3">
+          <XCircle className="w-5 h-5 flex-shrink-0" />
+          <p>{error}</p>
+        </div>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-4 text-sm text-red-600 dark:text-red-400 hover:underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  const formatTimeAgo = (dateString) => {
+    const seconds = Math.floor((new Date() - new Date(dateString)) / 1000);
+    let interval = Math.floor(seconds / 31536000);
+    if (interval > 1) return `${interval} years ago`;
+    interval = Math.floor(seconds / 2592000);
+    if (interval > 1) return `${interval} months ago`;
+    interval = Math.floor(seconds / 86400);
+    if (interval > 1) return `${interval} days ago`;
+    interval = Math.floor(seconds / 3600);
+    if (interval > 1) return `${interval} hours ago`;
+    interval = Math.floor(seconds / 60);
+    if (interval > 1) return `${interval} minutes ago`;
+    return `${Math.floor(seconds)} seconds ago`;
   };
+
+  const statCards = [
+    {
+      label: 'Total Contacts',
+      value: stats.contacts,
+      icon: Users,
+      color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400',
+      bgColor: 'bg-blue-50 dark:bg-blue-900/20'
+    },
+    {
+      label: 'Today\'s Contacts',
+      value: stats.todayContacts,
+      icon: Send,
+      color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400',
+      bgColor: 'bg-purple-50 dark:bg-purple-900/20'
+    },
+    {
+      label: 'Campaigns',
+      value: stats.campaigns,
+      icon: FileText,
+      color: 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
+      bgColor: 'bg-amber-50 dark:bg-amber-900/20'
+    },
+    {
+      label: 'Messages Sent',
+      value: stats.messagesSent,
+      icon: MessageSquare,
+      color: 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
+      bgColor: 'bg-green-50 dark:bg-green-900/20'
+    },
+    {
+      label: 'Failed Messages',
+      value: stats.failedMessages,
+      icon: XCircle,
+      color: 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
+      bgColor: 'bg-red-50 dark:bg-red-900/20'
+    },
+    {
+      label: 'Delivery Rate',
+      value: `${stats.deliveryRate}%`,
+      icon: TrendingUp,
+      color: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400',
+      bgColor: 'bg-emerald-50 dark:bg-emerald-900/20'
+    }
+  ];
+
+  const quickActions = [
+    {
+      icon: Users,
+      label: 'Manage Contacts',
+      description: 'View, import, and organize your contacts',
+      onClick: () => navigate('/contacts'),
+      color: 'text-green-600 dark:text-green-400',
+      bgColor: 'bg-green-50 dark:bg-green-900/20'
+    },
+    {
+      icon: Plus,
+      label: 'Create Campaign',
+      description: 'Design and send a WhatsApp blast',
+      onClick: () => navigate('/campaigns/new'),
+      color: 'text-green-600 dark:text-green-400',
+      bgColor: 'bg-green-50 dark:bg-green-900/20'
+    },
+    {
+      icon: MessageSquare,
+      label: 'View Campaigns',
+      description: 'Monitor sent campaigns and performance',
+      onClick: () => navigate('/campaigns'),
+      color: 'text-green-600 dark:text-green-400',
+      bgColor: 'bg-green-50 dark:bg-green-900/20'
+    },
+    {
+      icon: Search,
+      label: 'Scrape Leads',
+      description: 'Find new contacts from Google Maps',
+      onClick: () => navigate('/scraper'),
+      color: 'text-blue-600 dark:text-blue-400',
+      bgColor: 'bg-blue-50 dark:bg-blue-900/20'
+    }
+  ];
+
+  const campaignStatusItems = [
+    { label: 'Draft', count: campaignSummary.draft, color: 'text-gray-600 dark:text-gray-400', bgColor: 'bg-gray-100 dark:bg-gray-800' },
+    { label: 'Pending', count: campaignSummary.pending, color: 'text-blue-600 dark:text-blue-400', bgColor: 'bg-blue-100 dark:bg-blue-900/30' },
+    { label: 'Sending', count: campaignSummary.sending, color: 'text-yellow-600 dark:text-yellow-400', bgColor: 'bg-yellow-100 dark:bg-yellow-900/30' },
+    { label: 'Completed', count: campaignSummary.completed, color: 'text-green-600 dark:text-green-400', bgColor: 'bg-green-100 dark:bg-green-900/30' },
+    { label: 'Failed', count: campaignSummary.failed, color: 'text-red-600 dark:text-red-400', bgColor: 'bg-red-100 dark:bg-red-900/30' }
+  ];
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="bg-green-600 p-2 rounded-lg">
-              <MessageSquare className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-lg font-bold text-gray-800">WhatsApp Campaign</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">Hello, {userName}</span>
-            <button onClick={handleLogout} className="text-gray-500 hover:text-red-600 transition">
-              <LogOut className="w-5 h-5" />
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
+      {/* Quick Actions */}
+      <div className="p-6 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+        <h2 className="font-semibold text-slate-800 dark:text-white mb-4">Quick Actions</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {quickActions.map((action, index) => (
+            <button
+              key={index}
+              onClick={action.onClick}
+              className={`p-4 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer text-left group ${action.bgColor}`}
+            >
+              <div className="flex items-center mb-2">
+                <div className={`p-2 rounded-lg ${action.color} ${action.bgColor}`}>
+                  <action.icon className="w-6 h-6" />
+                </div>
+                <div className="ml-3">
+                  <p className="font-medium text-slate-800 dark:text-white">{action.label}</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">{action.description}</p>
+                </div>
+              </div>
             </button>
-          </div>
+          ))}
         </div>
-      
-          {v2 && (
-            <span className="ml-2 px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full font-semibold">
-              v2 · chatbot
-            </span>
-          )}
-      </header>
+      </div>
 
-      <main className="max-w-6xl mx-auto px-4 py-8">
+      {/* Stats Cards */}
+      <div className="p-6 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+        <h2 className="font-semibold text-slate-800 dark:text-white mb-4">Overview</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          {statCards.map((stat, index) => (
+            <div key={index} className={`p-4 rounded-xl border border-slate-200 dark:border-slate-700 ${stat.bgColor}`}>
+              <div className="flex items-center">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${stat.color}`}>
+                  <stat.icon className="w-5 h-5" />
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{stat.label}</p>
+                  <p className="text-2xl font-bold text-slate-900 dark:text-white">{stat.value}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
 
-        {/* WhatsApp Connection Status */}
-        <div className={`rounded-xl border-2 mb-8 overflow-hidden ${
-          waStatus?.connected
-            ? 'border-green-300 bg-green-50'
-            : waStatus
-            ? 'border-red-300 bg-red-50'
-            : 'border-gray-200 bg-white'
-        }`}>
-          <div className="px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
-            {/* Left: icon + status */}
+      {/* Campaign Status Summary & WhatsApp Connection */}
+      <div className="p-6 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Campaign Status */}
+          <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl border border-slate-200 dark:border-slate-700">
+            <h3 className="font-semibold text-slate-800 dark:text-white mb-4">Campaign Status</h3>
+            <div className="flex flex-wrap gap-2">
+              {campaignStatusItems.map((item, index) => (
+                <span
+                  key={index}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium ${item.bgColor} ${item.color}`}
+                >
+                  {item.label}: {item.count}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* WhatsApp Connection */}
+          <div className={`p-4 rounded-xl border-2 flex items-center justify-between gap-4 flex-wrap ${
+            waStatus?.connected
+              ? 'border-green-300 bg-green-50 dark:bg-green-900/20'
+              : waStatus
+              ? 'border-red-300 bg-red-50 dark:bg-red-900/20'
+              : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/50'
+          }`}>
             <div className="flex items-center gap-3">
               {waStatus?.connected ? (
-                <div className="bg-green-100 p-2 rounded-full">
-                  <Wifi className="w-6 h-6 text-green-600" />
+                <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                  <Wifi className="w-5 h-5 text-green-600 dark:text-green-400" />
                 </div>
               ) : waStatus ? (
-                <div className="bg-red-100 p-2 rounded-full">
-                  <WifiOff className="w-6 h-6 text-red-500" />
+                <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <WifiOff className="w-5 h-5 text-red-500 dark:text-red-400" />
                 </div>
               ) : (
-                <div className="bg-gray-100 p-2 rounded-full">
-                  <Wifi className="w-6 h-6 text-gray-400" />
+                <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
+                  <Wifi className="w-5 h-5 text-slate-400 dark:text-slate-500" />
                 </div>
               )}
-
               <div>
-                <p className="font-semibold text-gray-800">
+                <p className="font-semibold text-slate-800 dark:text-white">
                   {waStatus?.connected
-                    ? `Connected to WhatsApp`
+                    ? 'Connected to WhatsApp'
                     : waStatus
-                    ? `WhatsApp Disconnected`
+                    ? 'WhatsApp Disconnected'
                     : 'WhatsApp Not Connected'}
                 </p>
                 {waStatus ? (
-                  <p className={`text-sm ${waStatus.connected ? 'text-green-600' : 'text-red-500'}`}>
+                  <p className={`text-sm ${waStatus.connected ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
                     {waStatus.connected
-                      ? `Instance "${waStatus.instanceName}" — status: ${waStatus.state}`
+                      ? `Instance "${waStatus.instanceName}" — ${waStatus.state}`
                       : waStatus.error || `Status: ${waStatus.state}`}
                   </p>
                 ) : (
-                  <p className="text-sm text-gray-500">Add your Evolution API instance name below</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Configure Evolution API instance in Settings</p>
                 )}
               </div>
             </div>
-
-            {/* Right: input + button */}
-            <div className="flex items-center gap-2 flex-1 min-w-0" style={{ maxWidth: 480 }}>
-              <input
-                type="text"
-                placeholder="Evolution API instance name"
-                value={instanceName}
-                onChange={(e) => setInstanceName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && saveInstance()}
-                className="flex-1 min-w-0 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-              <button
-                onClick={saveInstance}
-                disabled={!instanceName.trim() || checkingWA}
-                className="flex items-center gap-1.5 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium whitespace-nowrap transition"
-              >
-                {checkingWA ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : waStatus?.connected ? (
-                  <RefreshCw className="w-4 h-4" />
-                ) : waStatus ? (
-                  <RefreshCw className="w-4 h-4" />
-                ) : (
-                  <CheckCircle className="w-4 h-4" />
-                )}
-                {checkingWA ? 'Checking...' : waStatus?.connected ? 'Recheck' : waStatus ? 'Retry' : 'Connect'}
-              </button>
-            </div>
-          </div>
-
-          {/* Quick status indicator */}
-          {waStatus?.connected && (
-            <div className="px-6 py-3 bg-green-100 border-t border-green-200 flex items-center gap-2 text-sm text-green-700">
-              <CheckCircle className="w-4 h-4" />
-              WhatsApp is connected and ready to send campaigns
-            </div>
-          )}
-          {waStatus && !waStatus.connected && (
-            <div className="px-6 py-3 bg-red-100 border-t border-red-200 flex items-center gap-2 text-sm text-red-700">
-              <XCircle className="w-4 h-4" />
-              {waStatus.error === 'Instance not found'
-                ? 'Instance not found. Make sure it exists in Evolution API and is connected.'
-                : 'Could not connect. Check the instance name or your Evolution API server.'}
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-between mb-8">
-          <h1 className="text-2xl font-bold text-gray-800">Dashboard</h1>
-          <div className="flex gap-3">
-            <Link
-              to="/contacts"
-              className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition text-sm font-medium"
-            >
-              Manage Contacts
-            </Link>
-            <Link
-              to="/campaigns/new"
-              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition text-sm font-medium flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              New Campaign
-            </Link>
           </div>
         </div>
+      </div>
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 text-sm">
-            {error}
+      {/* Recent Activity */}
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-slate-800 dark:text-white">Recent Activity</h2>
+          <button
+            onClick={() => navigate('/campaigns')}
+            className="text-sm text-green-600 dark:text-green-400 hover:underline"
+          >
+            View all
+          </button>
+        </div>
+        {recentActivity.length === 0 ? (
+          <div className="text-center py-12 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+            <MessageSquare className="w-12 h-12 mx-auto mb-3 text-slate-300 dark:text-slate-600" />
+            <p className="text-slate-500 dark:text-slate-400">No recent activity.</p>
+            <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Campaign activity will appear here once you start sending messages.</p>
           </div>
-        )}
-
-        {loading ? (
-          <div className="text-center py-16 text-gray-500">Loading...</div>
         ) : (
-          <>
-            {/* Stats */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-8">
-              <div className="bg-white rounded-xl shadow-sm p-6 flex items-center gap-4">
-                <div className="bg-blue-100 p-3 rounded-lg">
-                  <Users className="w-6 h-6 text-blue-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-800">{contacts.length}</p>
-                  <p className="text-sm text-gray-500">Total Contacts</p>
+          <div className="space-y-3">
+            {recentActivity.map((activity, index) => (
+              <div
+                key={`${activity.id}-${index}`}
+                className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-slate-800 dark:text-white flex items-center gap-2 flex-wrap">
+                      {activity.campaign_name ? (
+                        <>
+                          <span className="whitespace-nowrap truncate">{activity.campaign_name}</span>
+                          {activity.variant && (
+                            <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 text-xs rounded">
+                              Variant {activity.variant}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-slate-500 dark:text-slate-400">WhatsApp Message</span>
+                      )}
+                    </p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                      {activity.status === 'sent' ? (
+                        `Message sent to ${activity.phone}`
+                      ) : (
+                        `Failed to send to ${activity.phone}: ${activity.error_message || 'Unknown error'}`
+                      )}
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <span className={`text-sm font-medium ${activity.status === 'sent' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      {activity.status === 'sent' ? 'Sent' : 'Failed'}
+                    </span>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      {formatTimeAgo(activity.sent_at)}
+                    </p>
+                  </div>
                 </div>
               </div>
-              <div className="bg-white rounded-xl shadow-sm p-6 flex items-center gap-4">
-                <div className="bg-purple-100 p-3 rounded-lg">
-                  <Send className="w-6 h-6 text-purple-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-800">{campaigns.length}</p>
-                  <p className="text-sm text-gray-500">Campaigns</p>
-                </div>
-              </div>
-              <div className="bg-white rounded-xl shadow-sm p-6 flex items-center gap-4">
-                <div className="bg-green-100 p-3 rounded-lg">
-                  <MessageSquare className="w-6 h-6 text-green-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-800">
-                    {campaigns.reduce((sum, c) => sum + (c.sent_count || 0), 0)}
-                  </p>
-                  <p className="text-sm text-gray-500">Messages Sent</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Recent campaigns */}
-            <div className="bg-white rounded-xl shadow-sm">
-              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-                <h2 className="font-semibold text-gray-800">Recent Campaigns</h2>
-                <Link to="/campaigns" className="text-sm text-green-600 hover:text-green-700">
-                  View all
-                </Link>
-              </div>
-              {campaigns.length === 0 ? (
-                <div className="p-12 text-center text-gray-500">
-                  <MessageSquare className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-                  <p>No campaigns yet.</p>
-                  <Link to="/campaigns/new" className="text-green-600 hover:underline text-sm mt-1 inline-block">
-                    Create your first campaign
-                  </Link>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-gray-500 border-b border-gray-100">
-                        <th className="px-6 py-3 font-medium">Name</th>
-                        <th className="px-6 py-3 font-medium">Status</th>
-                        <th className="px-6 py-3 font-medium">Sent</th>
-                        <th className="px-6 py-3 font-medium">Failed</th>
-                        <th className="px-6 py-3 font-medium">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {campaigns.slice(0, 10).map((c) => (
-                        <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50">
-                          <td className="px-6 py-3 font-medium text-gray-800">{c.name}</td>
-                          <td className="px-6 py-3">{statusBadge(c.status)}</td>
-                          <td className="px-6 py-3 text-gray-600">{c.sent_count ?? 0}</td>
-                          <td className="px-6 py-3 text-gray-600">{c.failed_count ?? 0}</td>
-                          <td className="px-6 py-3 text-gray-500">
-                            {c.created_at ? new Date(c.created_at).toLocaleDateString() : '-'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </>
+            ))}
+          </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }
