@@ -2,21 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 import fs from 'fs';
 
-dotenv.config({
-  path: new URL('../.env', import.meta.url).pathname,
-});
-
-if (!process.env.JWT_SECRET) {
-  throw new Error('JWT_SECRET must be configured');
-}
-
-const uploadsDir = new URL('../uploads', import.meta.url).pathname;
-const distDir = new URL('../../frontend/dist', import.meta.url).pathname;
-
+dotenv.config();
 import statsRouter from './routes/stats.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -43,7 +36,9 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+const uploadsDir = path.join(__dirname, '../uploads');
 app.use('/uploads', express.static(uploadsDir));
+app.use(express.static(path.join(__dirname, '../../public')));
 
 import authRouter from './routes/auth.js';
 import contactsRouter from './routes/contacts.js';
@@ -68,11 +63,11 @@ app.use('/api/v2/gmail', gmailRouter);
 app.use('/api/v2', v2Router);
 app.use('/api/stats', statsRouter);
 
-app.use('/uploads', express.static(uploadsDir));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
+const distDir = path.join(__dirname, '../../frontend/dist');
 app.use(express.static(distDir));
 app.get('*', (req, res) => res.sendFile(path.join(distDir, 'index.html')));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
 fs.mkdirSync(path.join(uploadsDir, 'contacts'), { recursive: true });
 fs.mkdirSync(path.join(uploadsDir, 'media'), { recursive: true });

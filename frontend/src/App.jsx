@@ -8,6 +8,8 @@ import CampaignNew from './pages/CampaignNew';
 import CampaignHistory from './pages/CampaignHistory';
 import VersionBadge from './components/VersionBadge';
 import ChatAssistant from './components/ChatAssistant';
+import ModernLayout from './components/ModernLayout';
+import Scraper from './pages/Scraper';
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -32,48 +34,24 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-
-        {/* v1 routes */}
         <Route
-          path="/dashboard"
           element={
             <PrivateRoute>
-              <Dashboard />
+              <ModernLayout>
+                <Routes>
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/scraper" element={<Scraper />} />
+                  <Route path="/contacts" element={<Contacts />} />
+                  <Route path="/campaigns/new" element={<CampaignNew />} />
+                  <Route path="/campaigns" element={<CampaignHistory />} />
+                  <Route path="/settings" element={<div>Settings page coming soon</div>} />
+                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                </Routes>
+              </ModernLayout>
             </PrivateRoute>
           }
-        />
-        <Route
-          path="/contacts"
-          element={
-            <PrivateRoute>
-              <Contacts />
-            </PrivateRoute>
-          }
-        />
-        <Route
-          path="/campaigns/new"
-          element={
-            <PrivateRoute>
-              <CampaignNew />
-            </PrivateRoute>
-          }
-        />
-        <Route
-          path="/campaigns"
-          element={
-            <PrivateRoute>
-              <CampaignHistory />
-            </PrivateRoute>
-          }
-        />
-
-        {/* v2 routes — same components for now; new features live here */}
-        <Route path="/v2/dashboard" element={<PrivateRoute><Dashboard v2 /></PrivateRoute>} />
-        <Route path="/v2/contacts" element={<PrivateRoute><Contacts v2 /></PrivateRoute>} />
-        <Route path="/v2/campaigns/new" element={<PrivateRoute><CampaignNew v2 /></PrivateRoute>} />
-        <Route path="/v2/campaigns" element={<PrivateRoute><CampaignHistory v2 /></PrivateRoute>} />
-
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        >
+        </Route>
       </Routes>
       <ChatAssistant />
     </BrowserRouter>

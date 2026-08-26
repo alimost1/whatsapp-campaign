@@ -1,0 +1,82 @@
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import Dashboard from './pages/Dashboard';
+import Contacts from './pages/Contacts';
+import CampaignNew from './pages/CampaignNew';
+import CampaignHistory from './pages/CampaignHistory';
+import VersionBadge from './components/VersionBadge';
+import ChatAssistant from './components/ChatAssistant';
+import ModernLayout from './components/ModernLayout';
+
+function PrivateRoute({ children }) {
+  const token = localStorage.getItem('token');
+  return token ? children : <Navigate to="/login" replace />;
+}
+
+function VersionTracker() {
+  // Persist the active version based on the URL, so a page refresh keeps state.
+  const location = useLocation();
+  useEffect(() => {
+    const active = location.pathname.startsWith('/v2') ? '2' : '1';
+    localStorage.setItem('preferredVersion', active);
+  }, [location.pathname]);
+  return null;
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <VersionTracker />
+      <VersionBadge />
+      <ModernLayout>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+
+          {/* Main application routes */}
+          <Route
+            path="/dashboard"
+            element={
+              <PrivateRoute>
+                <Dashboard />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/contacts"
+            element={
+              <PrivateRoute>
+                <Contacts />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/campaigns/new"
+            element={
+              <PrivateRoute>
+                <CampaignNew />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/campaigns"
+            element={
+              <PrivateRoute>
+                <CampaignHistory />
+              </PrivateRoute>
+            }
+          />
+          <Route path="/scraper" element={<PrivateRoute><div>Scraper page coming soon</div></PrivateRoute>} />
+          <Route path="/settings" element={<PrivateRoute><div>Settings page coming soon</div></PrivateRoute>} />
+
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </ModernLayout>
+      <ChatAssistant />
+    </BrowserRouter>
+  );
+}
+
+export default App;
