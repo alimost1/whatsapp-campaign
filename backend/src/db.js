@@ -34,7 +34,6 @@ db.exec(`
     user_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     message_text TEXT,
-    image_path TEXT,
     contact_group TEXT,
     status TEXT DEFAULT 'draft',
     total_contacts INTEGER DEFAULT 0,
@@ -42,7 +41,21 @@ db.exec(`
     failed_count INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     sent_at DATETIME,
+    instance_name TEXT,
+    scheduledAt DATETIME,
+    channel TEXT DEFAULT 'evolution',
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS campaign_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS send_logs (
@@ -64,5 +77,48 @@ const hasInstanceName = campaignCols.some((c) => c.name === 'instance_name');
 if (!hasInstanceName) {
   db.exec('ALTER TABLE campaigns ADD COLUMN instance_name TEXT');
 }
+
+const hasScheduledAt = campaignCols.some((c) => c.name === 'scheduledAt');
+if (!hasScheduledAt) {
+  db.exec('ALTER TABLE campaigns ADD COLUMN scheduledAt DATETIME');
+}
+
+const hasChannel = campaignCols.some((c) => c.name === 'channel');
+if (!hasChannel) {
+  db.exec('ALTER TABLE campaigns ADD COLUMN channel TEXT DEFAULT \'evolution\'');
+}
+
+// Check if image_path column exists (legacy) and drop it
+const hasImagePath = campaignCols.some((c) => c.name === 'image_path');
+if (hasImagePath) {
+  db.exec('ALTER TABLE campaigns DROP COLUMN image_path');
+}
+
+// Check if campaign_attachments table exists, if not create it
+const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_attachments'").all();
+if (tables.length === 0) {
+  db.exec(`
+    CREATE TABLE campaign_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      file_path TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+    );
+  `);
+}
+
+// Indexes for performance
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_campaigns_user_id ON campaigns(user_id);
+  CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+  CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
+  CREATE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
+  CREATE INDEX IF NOT EXISTS idx_send_logs_campaign_id ON send_logs(campaign_id);
+  CREATE INDEX IF NOT EXISTS idx_campaign_attachments_campaign_id ON campaign_attachments(campaign_id);
+`);
 
 export default db;
