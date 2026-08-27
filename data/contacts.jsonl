@@ -1,0 +1,3 @@
+{"contacts": [], "_comment": "Contact leads with tags array. Each entry: {phone, name, tags[], source, createdAt}"}
+{"phone":"212641390881","name":"Test Lead","tags":["hot-buyer","gueliz","villa"],"source":"manual","createdAt":"2026-07-30T14:00:33.094Z"}
+{"phone":"212641390881","name":"Ahmed","tags":["hot-buyer","villa","marrakech"],"source":"manual","createdAt":"2026-07-31T14:54:09.196Z"}
